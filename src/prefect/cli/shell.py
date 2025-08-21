@@ -63,7 +63,7 @@ def run_shell_process(
     stream_stdout: bool = False,
     log_stderr: bool = False,
     popen_kwargs: Optional[Dict[str, Any]] = None,
-):
+) -> None:
     """
     Asynchronously executes the specified shell command and logs its output.
 
@@ -144,7 +144,7 @@ async def watch(
     tag: Annotated[
         Optional[List[str]], typer.Option(help="Optional tags for the flow run.")
     ] = None,
-):
+) -> None:
     """
     Executes a shell command and observes it as Prefect flow.
 
@@ -191,7 +191,7 @@ async def serve(
     run_once: bool = typer.Option(
         False, help="Run the agent loop once, instead of forever."
     ),
-):
+) -> None:
     """
     Creates and serves a Prefect deployment that runs a specified shell command according to a cron schedule or ad hoc.
 

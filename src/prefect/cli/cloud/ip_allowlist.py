@@ -77,7 +77,7 @@ async def enable(ctx: typer.Context) -> None:
 
 
 @ip_allowlist_app.command()
-async def disable():
+async def disable() -> None:
     """Disable the IP allowlist for your account. When disabled, all IP addresses will be allowed to access your Prefect Cloud account."""
     async with get_cloud_client(infer_cloud_url=True) as client:
         await client.update_account_settings({"enforce_ip_allowlist": False})
@@ -86,7 +86,7 @@ async def disable():
 
 
 @ip_allowlist_app.command()
-async def ls(ctx: typer.Context):
+async def ls(ctx: typer.Context) -> None:
     """Fetch and list all IP allowlist entries in your account."""
     async with get_cloud_client(infer_cloud_url=True) as client:
         ip_allowlist = await client.read_account_ip_allowlist()
@@ -128,7 +128,7 @@ async def add(
         "-d",
         help="A short description to annotate the entry with.",
     ),
-):
+) -> None:
     """Add a new IP entry to your account IP allowlist."""
     new_entry = IPAllowlistEntry(
         ip_network=ip_address_or_range.parsed, description=description, enabled=True
@@ -164,7 +164,7 @@ async def add(
 
 
 @ip_allowlist_app.command()
-async def remove(ctx: typer.Context, ip_address_or_range: IP_ARGUMENT):
+async def remove(ctx: typer.Context, ip_address_or_range: IP_ARGUMENT) -> None:
     """Remove an IP entry from your account IP allowlist."""
     async with get_cloud_client(infer_cloud_url=True) as client:
         ip_allowlist = await client.read_account_ip_allowlist()
@@ -186,7 +186,7 @@ async def remove(ctx: typer.Context, ip_address_or_range: IP_ARGUMENT):
 
 
 @ip_allowlist_app.command()
-async def toggle(ctx: typer.Context, ip_address_or_range: IP_ARGUMENT):
+async def toggle(ctx: typer.Context, ip_address_or_range: IP_ARGUMENT) -> None:
     """Toggle the enabled status of an individual IP entry in your account IP allowlist."""
     async with get_cloud_client(infer_cloud_url=True) as client:
         ip_allowlist = await client.read_account_ip_allowlist()
@@ -214,7 +214,7 @@ async def toggle(ctx: typer.Context, ip_address_or_range: IP_ARGUMENT):
         )
 
 
-def _print_ip_allowlist_table(ip_allowlist: IPAllowlist, enabled: bool):
+def _print_ip_allowlist_table(ip_allowlist: IPAllowlist, enabled: bool) -> None:
     if not ip_allowlist.entries:
         app.console.print(
             Panel(
@@ -250,7 +250,7 @@ def _print_ip_allowlist_table(ip_allowlist: IPAllowlist, enabled: bool):
     app.console.print(table)
 
 
-def _handle_update_error(error: PrefectHTTPStatusError):
+def _handle_update_error(error: PrefectHTTPStatusError) -> None:
     if error.response.status_code == 422 and (
         details := (
             error.response.json().get("detail")

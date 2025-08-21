@@ -30,7 +30,7 @@ app.add_typer(global_concurrency_limit_app, aliases=["gcl"])
 
 
 @global_concurrency_limit_app.command("ls")
-async def list_global_concurrency_limits():
+async def list_global_concurrency_limits() -> None:
     """
     List all global concurrency limits.
     """
@@ -88,7 +88,7 @@ async def inspect_global_concurrency_limit(
         "-f",
         help="Path to .json file to write the global concurrency limit output to.",
     ),
-):
+) -> None:
     """
     Inspect a global concurrency limit.
 
@@ -140,7 +140,7 @@ async def delete_global_concurrency_limit(
     name: str = typer.Argument(
         ..., help="The name of the global concurrency limit to delete."
     ),
-):
+) -> None:
     """
     Delete a global concurrency limit.
 
@@ -169,7 +169,7 @@ async def enable_global_concurrency_limit(
     name: str = typer.Argument(
         ..., help="The name of the global concurrency limit to enable."
     ),
-):
+) -> None:
     """
     Enable a global concurrency limit.
 
@@ -198,7 +198,7 @@ async def disable_global_concurrency_limit(
     name: str = typer.Argument(
         ..., help="The name of the global concurrency limit to disable."
     ),
-):
+) -> None:
     """
     Disable a global concurrency limit.
 

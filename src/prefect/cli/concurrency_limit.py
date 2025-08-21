@@ -27,7 +27,7 @@ app.add_typer(concurrency_limit_app, aliases=["concurrency-limits"])
 
 
 @concurrency_limit_app.command()
-async def create(tag: str, concurrency_limit: int):
+async def create(tag: str, concurrency_limit: int) -> None:
     """
     Create a concurrency limit against a tag.
 
@@ -67,7 +67,7 @@ async def inspect(
         "-o",
         help="Specify an output format. Currently supports: json",
     ),
-):
+) -> None:
     """
     View details about a concurrency limit. `active_slots` shows a list of TaskRun IDs
     which are currently using a concurrency slot.
@@ -113,7 +113,7 @@ async def inspect(
 
 
 @concurrency_limit_app.command()
-async def ls(limit: int = 15, offset: int = 0):
+async def ls(limit: int = 15, offset: int = 0) -> None:
     """
     View all concurrency limits.
     """
@@ -145,7 +145,7 @@ async def ls(limit: int = 15, offset: int = 0):
 
 
 @concurrency_limit_app.command()
-async def reset(tag: str):
+async def reset(tag: str) -> None:
     """
     Resets the concurrency limit slots set on the specified tag.
     """
@@ -160,7 +160,7 @@ async def reset(tag: str):
 
 
 @concurrency_limit_app.command()
-async def delete(tag: str):
+async def delete(tag: str) -> None:
     """
     Delete the concurrency limit set on the specified tag.
     """

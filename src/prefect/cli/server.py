@@ -378,7 +378,7 @@ def _run_in_foreground(
 
 
 @server_app.command()
-async def stop():
+async def stop() -> None:
     """Stop a Prefect server instance running in the background"""
     pid_file = Path(PREFECT_HOME.value()) / SERVER_PID_FILE_NAME
     if not pid_file.exists():
@@ -524,7 +524,7 @@ async def revision(
 
 
 @database_app.command()
-async def stamp(revision: str):
+async def stamp(revision: str) -> None:
     """Stamp the revision table with the given revision; don't run any migrations"""
     from prefect.server.database.alembic_commands import alembic_stamp
 
@@ -567,7 +567,7 @@ def _cleanup_pid_file(path: Path) -> None:
 
 # this is a hidden command used by the `prefect server services start --background` command
 @services_app.command(hidden=True, name="manager")
-def run_manager_process():
+def run_manager_process() -> None:
     """
     This is an internal entrypoint used by `prefect server services start --background`.
     Users do not call this directly.
@@ -589,7 +589,7 @@ def run_manager_process():
 
 # public, user-facing `prefect server services` commands
 @services_app.command(aliases=["ls"])
-def list_services():
+def list_services() -> None:
     """List all available services and their status."""
     table = Table(title="Available Services", expand=True)
     table.add_column("Name", no_wrap=True)
@@ -671,7 +671,7 @@ def start_services(
 
 
 @services_app.command(aliases=["stop"])
-async def stop_services():
+async def stop_services() -> None:
     """Stop any background Prefect services that were started."""
 
     if not SERVICES_PID_FILE.exists():

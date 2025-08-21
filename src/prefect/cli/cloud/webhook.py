@@ -42,7 +42,7 @@ def _render_webhooks_into_table(webhooks: List[Dict[str, str]]) -> Table:
 
 
 @webhook_app.command()
-async def ls():
+async def ls() -> None:
     """
     Fetch and list all webhooks in your workspace
     """
@@ -56,7 +56,7 @@ async def ls():
 
 
 @webhook_app.command()
-async def get(webhook_id: UUID):
+async def get(webhook_id: UUID) -> None:
     """
     Retrieve a webhook by ID.
     """
@@ -78,7 +78,7 @@ async def create(
     template: str = typer.Option(
         None, "--template", "-t", help="Jinja2 template expression"
     ),
-):
+) -> None:
     """
     Create a new Cloud webhook
     """
@@ -108,7 +108,7 @@ async def create(
 
 
 @webhook_app.command()
-async def rotate(webhook_id: UUID):
+async def rotate(webhook_id: UUID) -> None:
     """
     Rotate url for an existing Cloud webhook, in case it has been compromised
     """
@@ -130,7 +130,7 @@ async def rotate(webhook_id: UUID):
 @webhook_app.command()
 async def toggle(
     webhook_id: UUID,
-):
+) -> None:
     """
     Toggle the enabled status of an existing Cloud webhook
     """
@@ -159,7 +159,7 @@ async def update(
     template: str = typer.Option(
         None, "--template", "-t", help="Jinja2 template expression"
     ),
-):
+) -> None:
     """
     Partially update an existing Cloud webhook
     """
@@ -179,7 +179,7 @@ async def update(
 
 
 @webhook_app.command()
-async def delete(webhook_id: UUID):
+async def delete(webhook_id: UUID) -> None:
     """
     Delete an existing Cloud webhook
     """
