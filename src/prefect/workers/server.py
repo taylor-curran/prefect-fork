@@ -4,6 +4,7 @@ import uvicorn
 from fastapi import APIRouter, FastAPI, status
 from fastapi.responses import JSONResponse
 
+import prefect.types._datetime
 from prefect.settings import (
     PREFECT_WORKER_WEBSERVER_HOST,
     PREFECT_WORKER_WEBSERVER_PORT,
@@ -30,6 +31,16 @@ def build_healthcheck_server(
         did_recently_poll = worker.is_worker_still_polling(
             query_interval_seconds=query_interval_seconds
         )
+
+        if hasattr(worker, "_telemetry"):
+            seconds_since_last_poll = (
+                prefect.types._datetime.now("UTC") - worker._last_polled_time
+            ).seconds
+            worker._telemetry.record_health_check(
+                is_healthy=did_recently_poll,
+                query_interval_seconds=query_interval_seconds,
+                seconds_since_last_poll=seconds_since_last_poll,
+            )
 
         if not did_recently_poll:
             return JSONResponse(

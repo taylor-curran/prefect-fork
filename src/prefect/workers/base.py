@@ -510,6 +510,9 @@ class BaseWorker(abc.ABC, Generic[C, V, R]):
         self._cancelling_flow_run_ids: set[UUID] = set()
         self._scheduled_task_scopes: set[anyio.CancelScope] = set()
         self._worker_metadata_sent = False
+        
+        from prefect.telemetry.worker_telemetry import WorkerTelemetry
+        self._telemetry = WorkerTelemetry()
 
     @property
     def client(self) -> PrefectClient:
@@ -633,8 +636,10 @@ class BaseWorker(abc.ABC, Generic[C, V, R]):
         """
         healthcheck_server = None
         healthcheck_thread = None
+        worker_error = None
         try:
             async with self as worker:
+                self._telemetry.start_worker_span(self)
                 # schedule the scheduled flow run polling loop
                 async with anyio.create_task_group() as loops_task_group:
                     loops_task_group.start_soon(
@@ -679,6 +684,9 @@ class BaseWorker(abc.ABC, Generic[C, V, R]):
                         )
                         healthcheck_thread.start()
                     printer(f"Worker {worker.name!r} started!")
+        except Exception as e:
+            worker_error = e
+            raise e
         finally:
             stop_client_metrics_server()
 
@@ -687,6 +695,8 @@ class BaseWorker(abc.ABC, Generic[C, V, R]):
                 healthcheck_server.should_exit = True
                 healthcheck_thread.join()
                 self._logger.debug("Healthcheck server stopped.")
+            
+            self._telemetry.end_worker_span(worker_error)
 
         printer(f"Worker {worker.name!r} stopped!")
 
@@ -968,11 +978,25 @@ class BaseWorker(abc.ABC, Generic[C, V, R]):
         return is_still_polling
 
     async def get_and_submit_flow_runs(self) -> list["FlowRun"]:
-        runs_response = await self._get_scheduled_flow_runs()
+        self._telemetry.start_polling_span(self)
 
-        self._last_polled_time = prefect.types._datetime.now("UTC")
+        polling_error = None
+        flow_runs = []
+        try:
+            runs_response = await self._get_scheduled_flow_runs()
+            self._last_polled_time = prefect.types._datetime.now("UTC")
+            flow_runs = await self._submit_scheduled_flow_runs(
+                flow_run_response=runs_response
+            )
+        except Exception as e:
+            polling_error = e
+            raise e
+        finally:
+            self._telemetry.end_polling_span(
+                flow_runs_count=len(flow_runs), error=polling_error
+            )
 
-        return await self._submit_scheduled_flow_runs(flow_run_response=runs_response)
+        return flow_runs
 
     async def _update_local_work_pool_info(self) -> None:
         if TYPE_CHECKING:
@@ -1052,6 +1076,8 @@ class BaseWorker(abc.ABC, Generic[C, V, R]):
             self._logger.debug("Worker has no work pool; skipping heartbeat.")
             return None
 
+        self._telemetry.start_heartbeat_span(self)
+
         should_get_worker_id = self._should_get_worker_id()
 
         params: dict[str, Any] = {
@@ -1070,17 +1096,33 @@ class BaseWorker(abc.ABC, Generic[C, V, R]):
                 self._worker_metadata_sent = True
 
         worker_id = None
+        heartbeat_error = None
         try:
             worker_id = await self._client.send_worker_heartbeat(**params)
         except httpx.HTTPStatusError as e:
+            heartbeat_error = e
             if e.response.status_code == 422 and should_get_worker_id:
                 self._logger.warning(
                     "Failed to retrieve worker ID from the Prefect API server."
                 )
                 params["get_worker_id"] = False
-                worker_id = await self._client.send_worker_heartbeat(**params)
+                try:
+                    worker_id = await self._client.send_worker_heartbeat(**params)
+                    heartbeat_error = None  # Success on retry
+                except Exception as retry_error:
+                    heartbeat_error = retry_error
+                    raise retry_error
             else:
                 raise e
+        except Exception as e:
+            heartbeat_error = e
+            raise e
+        finally:
+            self._telemetry.end_heartbeat_span(
+                success=heartbeat_error is None,
+                worker_id=worker_id,
+                error=heartbeat_error,
+            )
 
         if should_get_worker_id and worker_id is None:
             self._logger.warning(
