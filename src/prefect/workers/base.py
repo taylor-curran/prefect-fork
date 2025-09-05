@@ -510,8 +510,9 @@ class BaseWorker(abc.ABC, Generic[C, V, R]):
         self._cancelling_flow_run_ids: set[UUID] = set()
         self._scheduled_task_scopes: set[anyio.CancelScope] = set()
         self._worker_metadata_sent = False
-        
+
         from prefect.telemetry.worker_telemetry import WorkerTelemetry
+
         self._telemetry = WorkerTelemetry()
 
     @property
@@ -695,7 +696,7 @@ class BaseWorker(abc.ABC, Generic[C, V, R]):
                 healthcheck_server.should_exit = True
                 healthcheck_thread.join()
                 self._logger.debug("Healthcheck server stopped.")
-            
+
             self._telemetry.end_worker_span(worker_error)
 
         printer(f"Worker {worker.name!r} stopped!")
