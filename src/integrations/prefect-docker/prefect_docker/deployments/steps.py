@@ -399,7 +399,16 @@ def push_docker_image(
                 sys.stdout.write("\n")
                 sys.stdout.flush()
             elif "error" in event:
-                raise OSError(event["error"])
+                error_msg = event["error"]
+                raise OSError(
+                    f"Failed to push Docker image '{image_name}:{tag}' to registry. "
+                    f"Original error: {error_msg}\n\n"
+                    f"Common solutions:\n"
+                    f"- Ensure you are logged in to the Docker registry: `docker login`\n"
+                    f"- Verify you have push permissions to the repository\n"
+                    f"- Check that the repository exists and the image name is correct\n"
+                    f"- For private registries, ensure your credentials are properly configured"
+                )
 
     return {
         "image_name": image_name,

@@ -405,7 +405,7 @@ def test_push_docker_image_raises_on_event_error(mock_docker_client: MagicMock):
     error_event = [{"error": "Error"}]
     mock_docker_client.api.push.return_value = error_event
 
-    with pytest.raises(OSError, match="Error"):
+    with pytest.raises(OSError, match=r"Failed to push Docker image.*Original error: Error"):
         push_docker_image(
             image_name=FAKE_IMAGE_NAME,
             tag=FAKE_TAG,
