@@ -60,7 +60,240 @@ Below is a list of available worker types. Most worker types require installatio
 | [`coiled`](https://github.com/coiled/prefect-worker/blob/main/example/README.md) | Execute flow runs in your cloud with Coiled | `prefect-coiled` |
 
 If you don't see a worker type that meets your needs, consider 
-[developing a new worker type](/contribute/develop-a-new-worker-type/).
+[developing a new worker type](/contribute/develop-a-new-worker-type/). See the [custom worker development guide](/contribute/develop-a-new-worker-type/) for advanced customization options.
+
+## Choosing a Worker Type
+
+Selecting the right worker type depends on your infrastructure requirements, scalability needs, and operational constraints. Use this decision tree to guide your choice:
+
+```mermaid
+%%{
+  init: {
+    'theme': 'neutral',
+    'themeVariables': {
+      'margin': '10px'
+    }
+  }
+}%%
+
+flowchart TD
+    A[Start: Choose Worker Type] --> B{Where will flows run?}
+    
+    B -->|Local Development/Testing| C[Process Worker]
+    B -->|Cloud Infrastructure| D{What cloud platform?}
+    B -->|On-Premises| E{Container orchestration?}
+    
+    D -->|AWS| F{Serverless or persistent?}
+    D -->|Google Cloud| G{Serverless or persistent?}
+    D -->|Azure| H[Azure Container Instance]
+    D -->|Multi-cloud/Hybrid| I[Docker Worker]
+    
+    F -->|Serverless| J[ECS Worker]
+    F -->|Persistent| K[ECS Worker]
+    
+    G -->|Serverless| L[Cloud Run v2 Worker]
+    G -->|Persistent/ML Workloads| M[Vertex AI Worker]
+    
+    E -->|Yes - Kubernetes| N[Kubernetes Worker]
+    E -->|Yes - Docker| O[Docker Worker]
+    E -->|No| P[Process Worker]
+    
+    C --> Q[✓ Simple setup, local execution]
+    J --> R[✓ Auto-scaling, managed infrastructure]
+    K --> S[✓ Persistent containers, cost control]
+    L --> T[✓ Serverless, pay-per-use]
+    M --> U[✓ ML/AI workloads, GPU support]
+    H --> V[✓ Azure-native, container isolation]
+    N --> W[✓ Production-grade, auto-scaling]
+    O --> X[✓ Portable containers, flexible deployment]
+    P --> Y[✓ Simple setup, direct process execution]
+```
+
+### Worker Type Comparison
+
+| Worker Type | Best For | Pros | Cons | Typical Use Cases |
+|-------------|----------|------|------|-------------------|
+| **Process** | Local development, simple deployments | • No additional dependencies<br>• Fast startup<br>• Easy debugging | • Limited isolation<br>• Single machine scaling<br>• No resource limits | Development, testing, simple automation |
+| **Docker** | Portable containerized workloads | • Environment isolation<br>• Reproducible builds<br>• Flexible deployment | • Requires Docker setup<br>• Container overhead | CI/CD, multi-environment deployments |
+| **Kubernetes** | Production-grade orchestration | • Auto-scaling<br>• High availability<br>• Resource management<br>• Production-ready | • Complex setup<br>• Kubernetes knowledge required | Large-scale production, microservices |
+| **ECS** | AWS-native container orchestration | • AWS integration<br>• Managed infrastructure<br>• Auto-scaling | • AWS vendor lock-in<br>• ECS-specific configuration | AWS-centric architectures |
+| **Cloud Run v2** | Google Cloud serverless containers | • Serverless scaling<br>• Pay-per-use<br>• Managed infrastructure | • GCP vendor lock-in<br>• Cold start latency | Event-driven workloads, cost optimization |
+| **Vertex AI** | ML/AI workloads on Google Cloud | • GPU/TPU support<br>• ML-optimized<br>• Managed notebooks | • GCP vendor lock-in<br>• ML-specific use case | Machine learning, data science pipelines |
+| **Azure Container Instance** | Azure-native container execution | • Azure integration<br>• Simple container deployment<br>• Pay-per-second billing | • Azure vendor lock-in<br>• Limited orchestration | Azure-centric simple containerization |
+
+### Infrastructure Decision Factors
+
+**Choose Process Worker when:**
+- Developing or testing flows locally
+- Running simple automation tasks
+- Working in resource-constrained environments
+- No containerization requirements
+
+**Choose Docker Worker when:**
+- Need environment isolation and reproducibility
+- Deploying across multiple environments
+- Using custom dependencies or system packages
+- Want container portability without orchestration complexity
+
+**Choose Kubernetes Worker when:**
+- Running production workloads at scale
+- Need high availability and fault tolerance
+- Require advanced resource management and auto-scaling
+- Have existing Kubernetes infrastructure
+
+**Choose Cloud-Specific Workers when:**
+- Leveraging cloud-native services and integrations
+- Need managed infrastructure with minimal operational overhead
+- Optimizing for cloud provider-specific features (serverless, GPU, etc.)
+- Following cloud-first architectural patterns
+
+### Interactive Worker Type Selection
+
+When creating a work pool without specifying a `--type`, Prefect provides an interactive selection interface. This process guides you through choosing the appropriate worker type based on available options.
+
+#### CLI Selection Process
+
+The interactive selection appears when running:
+
+```bash
+prefect work-pool create "my-pool"
+```
+
+You'll see a table-based selection interface:
+
+```
+? What type of work pool infrastructure would you like to use? [Use arrows to move; enter to select]
+
+> Infrastructure Type    Description
+  ──────────────────────────────────────────────────────────────────
+> Process               Execute flow runs in subprocesses on the worker
+  Docker                Execute flow runs within Docker containers  
+  Kubernetes            Execute flow runs as Kubernetes jobs
+  ECS                   Execute flow runs as AWS ECS tasks
+  Cloud Run v2          Execute flow runs as Google Cloud Run jobs
+  Vertex AI             Execute flow runs as Google Cloud Vertex AI jobs
+  Azure Container Inst. Execute flow runs in Azure Container Instances
+```
+
+**Navigation:**
+- Use arrow keys (↑/↓) to move between options
+- Press Enter to select the highlighted worker type
+- Press Ctrl+C to cancel the operation
+
+**Behind the Scenes:**
+The CLI fetches worker metadata from the Prefect collections registry, which includes display names and descriptions for each available worker type. The selection process automatically filters options based on whether you're provisioning infrastructure (`--provision-infrastructure` flag).
+
+### Troubleshooting Worker Type Selection
+
+#### Common Issues and Solutions
+
+**Issue: "Unknown work pool type" error**
+```bash
+Unknown work pool type 'my-type'. Please choose from process, docker, kubernetes, ecs, cloud-run-v2, vertex-ai, azure-container-instance.
+```
+
+**Solution:** Ensure you're using a valid worker type name. Check available types with:
+```bash
+prefect worker start --help
+```
+
+**Issue: Worker type inference fails**
+```bash
+Work pool 'my-pool' does not exist and no worker type was provided. Starting a process worker...
+```
+
+**Cause:** This occurs when:
+- The specified work pool doesn't exist
+- No `--type` flag is provided
+- The system falls back to process worker as default
+
+**Solution:** Either create the work pool first or specify the worker type explicitly:
+```bash
+prefect worker start --pool "my-pool" --type "docker"
+```
+
+**Issue: Missing integration package**
+```bash
+Could not find the Prefect integration library for the kubernetes worker in the current environment.
+```
+
+**Cause:** The required integration package isn't installed.
+
+**Solution:** Install the required package or use the `--install-policy` flag:
+```bash
+# Install manually
+pip install prefect-kubernetes
+
+# Or let Prefect handle it
+prefect worker start --pool "my-pool" --type "kubernetes" --install-policy "always"
+```
+
+**Issue: Worker type mismatch warning**
+```bash
+Worker type mismatch! This worker process expects type 'process' but received 'docker' from the server.
+```
+
+**Cause:** The worker type doesn't match the work pool's configured type.
+
+**Solution:** Either:
+- Start a worker with the correct type: `prefect worker start --pool "my-pool" --type "docker"`
+- Or recreate the work pool with the desired type
+
+#### Worker Type Inference Logic
+
+Prefect uses the following priority order for determining worker type:
+
+1. **Explicit `--type` flag** - Highest priority
+2. **Work pool type inference** - If work pool exists, use its configured type
+3. **Default fallback** - Falls back to "process" worker if neither above is available
+
+The inference process ensures workers can start even when work pools don't exist, but this may not always match your intended infrastructure.
+
+### Worker Type Selection Examples
+
+#### Scenario 1: Local Development
+```bash
+# Create a simple work pool for local testing
+prefect work-pool create "dev-pool" --type process
+
+# Start a worker for development
+prefect worker start --pool "dev-pool"
+```
+
+#### Scenario 2: Production Kubernetes Deployment
+```bash
+# Create a Kubernetes work pool with custom configuration
+prefect work-pool create "prod-k8s-pool" --type kubernetes
+
+# Start a Kubernetes worker with resource limits
+prefect worker start --pool "prod-k8s-pool" --limit 10
+```
+
+#### Scenario 3: AWS ECS with Auto-Installation
+```bash
+# Let Prefect install the AWS integration automatically
+prefect worker start --pool "aws-pool" --type ecs --install-policy always
+```
+
+#### Scenario 4: Multi-Environment Docker Setup
+```bash
+# Create work pools for different environments
+prefect work-pool create "staging-docker" --type docker
+prefect work-pool create "prod-docker" --type docker
+
+# Start workers with environment-specific configurations
+prefect worker start --pool "staging-docker" --work-queue "staging-queue"
+prefect worker start --pool "prod-docker" --work-queue "prod-queue" --limit 5
+```
+
+#### Scenario 5: Interactive Work Pool Creation
+```bash
+# Let Prefect guide you through the selection process
+prefect work-pool create "my-new-pool"
+# Follow the interactive prompts to choose the best worker type
+```
+
+
 
 ### Worker options
 
