@@ -230,6 +230,31 @@ echo "{formatted_creds}"
             env["GIT_TERMINAL_PROMPT"] = "0"
         return env
 
+    def _format_url_with_credentials(self, url: str) -> str:
+        """Format URL with credentials for git config insteadOf (submodules only)."""
+        if not self._credentials:
+            return url
+
+        credentials = (
+            self._credentials.model_dump()
+            if isinstance(self._credentials, Block)
+            else deepcopy(self._credentials)
+        )
+
+        for k, v in credentials.items():
+            if isinstance(v, Secret):
+                credentials[k] = v.get()
+            elif isinstance(v, SecretStr):
+                credentials[k] = v.get_secret_value()
+
+        parsed_url = urlparse(url)
+        formatted_creds = _format_token_from_credentials(parsed_url.netloc, credentials)
+
+        updated_url = parsed_url._replace(
+            netloc=f"{formatted_creds}@{parsed_url.netloc}"
+        )
+        return urlunparse(updated_url)
+
     @property
     def _repository_url_with_credentials(self) -> str:
         return self._url
@@ -245,7 +270,7 @@ echo "{formatted_creds}"
         if self._include_submodules and self._formatted_credentials:
             base_url = urlparse(self._url)._replace(path="")
             without_auth = urlunparse(base_url)
-            with_auth = self._add_credentials_to_url(without_auth)
+            with_auth = self._format_url_with_credentials(without_auth)
             config[f"url.{with_auth}.insteadOf"] = without_auth
 
         return ["-c", " ".join(f"{k}={v}" for k, v in config.items())] if config else []
@@ -391,10 +416,10 @@ echo "{formatted_creds}"
         """
         Clones the repository into the local destination.
         """
-        self._logger.debug("Cloning repository %s", self._url)
+        self._logger.debug("Cloning repository %s", _strip_auth_from_url(self._url))
 
         # Use clean URL without credentials
-        repository_url = self._url
+        repository_url = _strip_auth_from_url(self._url)
         cmd = ["git"]
         # Add the git configuration, must be given after `git` and before the command
         cmd += self._git_config
@@ -429,7 +454,7 @@ echo "{formatted_creds}"
             await run_process(cmd, env=git_env)
         except subprocess.CalledProcessError as exc:
             raise RuntimeError(
-                f"Failed to clone repository {self._url!r} with exit code {exc.returncode}."
+                f"Failed to clone repository {_strip_auth_from_url(self._url)!r} with exit code {exc.returncode}."
             ) from exc
         finally:
             if credential_script and os.path.exists(credential_script):
