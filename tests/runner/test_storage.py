@@ -297,16 +297,52 @@ class TestGitRepository:
         )
         await repo.pull_code()
 
-        mock_run_process.assert_awaited_once_with(
-            [
-                "git",
-                "clone",
-                "https://username:password@github.com/org/repo.git",
-                "--depth",
-                "1",
-                str(Path.cwd() / "repo"),
-            ]
+        # Verify that the git clone command does not contain credentials
+        call_args = mock_run_process.call_args
+        command = call_args[0][0]
+
+        command_str = " ".join(command)
+        assert "password" not in command_str
+        assert "username:password" not in command_str
+        assert "@github.com" not in command_str or "username:" not in command_str
+
+        # Verify that GIT_ASKPASS is set in environment
+        env = call_args[1].get("env", {})
+        assert "GIT_ASKPASS" in env
+        assert "GIT_TERMINAL_PROMPT" in env
+        assert env["GIT_TERMINAL_PROMPT"] == "0"
+
+    async def test_credentials_not_in_command_args(
+        self,
+        monkeypatch,
+        mock_run_process: AsyncMock,
+    ):
+        """
+        Verify that credentials do not appear in git command arguments.
+        This is a security test to ensure credentials are passed via environment variables.
+        """
+        monkeypatch.setattr("pathlib.Path.exists", lambda x: False)
+
+        repo = GitRepository(
+            url="https://github.com/org/repo.git",
+            credentials={"username": "username", "password": "secret_password"},
         )
+        await repo.pull_code()
+
+        # Verify that the git clone command does not contain credentials
+        call_args = mock_run_process.call_args
+        command = call_args[0][0]
+
+        command_str = " ".join(command)
+        assert "secret_password" not in command_str
+        assert "username:secret_password" not in command_str
+        assert "@github.com" not in command_str or "username:" not in command_str
+
+        # Verify that GIT_ASKPASS is set in environment
+        env = call_args[1].get("env", {})
+        assert "GIT_ASKPASS" in env
+        assert "GIT_TERMINAL_PROMPT" in env
+        assert env["GIT_TERMINAL_PROMPT"] == "0"
 
     def test_eq(self):
         repo1 = GitRepository(url="https://github.com/org/repo.git")

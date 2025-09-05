@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import os
 import shutil
+import stat
 import subprocess
+import tempfile
 from copy import deepcopy
 from pathlib import Path
 from typing import (
@@ -186,21 +189,50 @@ class GitRepository:
 
         return _format_token_from_credentials(urlparse(self._url).netloc, credentials)
 
-    def _add_credentials_to_url(self, url: str) -> str:
-        """Add credentials to given url if possible."""
-        components = urlparse(url)
-        credentials = self._formatted_credentials
+    def _create_credential_helper_script(self) -> Optional[str]:
+        """Create a temporary script for GIT_ASKPASS that provides credentials securely."""
+        if not self._credentials:
+            return None
 
-        if components.scheme != "https" or not credentials:
-            return url
-
-        return urlunparse(
-            components._replace(netloc=f"{credentials}@{components.netloc}")
+        credentials = (
+            self._credentials.model_dump()
+            if isinstance(self._credentials, Block)
+            else deepcopy(self._credentials)
         )
+
+        for k, v in credentials.items():
+            if isinstance(v, Secret):
+                credentials[k] = v.get()
+            elif isinstance(v, SecretStr):
+                credentials[k] = v.get_secret_value()
+
+        formatted_creds = _format_token_from_credentials(
+            urlparse(self._url).netloc, credentials
+        )
+
+        script_content = f'''#!/bin/bash
+echo "{formatted_creds}"
+'''
+
+        fd, script_path = tempfile.mkstemp(suffix=".sh", prefix="git_askpass_")
+        with os.fdopen(fd, "w") as f:
+            f.write(script_content)
+
+        os.chmod(script_path, stat.S_IRWXU)
+        return script_path
+
+    def _get_git_env(self) -> dict[str, str]:
+        """Get environment variables for secure Git credential handling."""
+        env = {}
+        credential_script = self._create_credential_helper_script()
+        if credential_script:
+            env["GIT_ASKPASS"] = credential_script
+            env["GIT_TERMINAL_PROMPT"] = "0"
+        return env
 
     @property
     def _repository_url_with_credentials(self) -> str:
-        return self._add_credentials_to_url(self._url)
+        return self._url
 
     @property
     def _git_config(self) -> list[str]:
@@ -298,51 +330,59 @@ class GitRepository:
             # Add the git configuration, must be given after `git` and before the command
             cmd += self._git_config
 
-            # If the commit is already checked out, skip the pull
-            if self._commit_sha and await self.is_current_commit():
-                return
+            # Get secure environment for credentials
+            git_env = self._get_git_env()
+            credential_script = git_env.get("GIT_ASKPASS")
 
-            # If checking out a specific commit, fetch the latest changes and unshallow the repository if necessary
-            elif self._commit_sha:
-                if await self.is_shallow_clone():
-                    cmd += ["fetch", "origin", "--unshallow"]
+            try:
+                # If the commit is already checked out, skip the pull
+                if self._commit_sha and await self.is_current_commit():
+                    return
+
+                # If checking out a specific commit, fetch the latest changes and unshallow the repository if necessary
+                elif self._commit_sha:
+                    if await self.is_shallow_clone():
+                        cmd += ["fetch", "origin", "--unshallow"]
+                    else:
+                        cmd += ["fetch", "origin", self._commit_sha]
+                    try:
+                        await run_process(cmd, cwd=self.destination, env=git_env)
+                        self._logger.debug("Successfully fetched latest changes")
+                    except subprocess.CalledProcessError as exc:
+                        self._logger.error(
+                            f"Failed to fetch latest changes with exit code {exc}"
+                        )
+                        shutil.rmtree(self.destination)
+                        await self._clone_repo()
+
+                    await run_process(
+                        ["git", "checkout", self._commit_sha],
+                        cwd=self.destination,
+                    )
+                    self._logger.debug(
+                        f"Successfully checked out commit {self._commit_sha}"
+                    )
+
+                # Otherwise, pull the latest changes from the branch
                 else:
-                    cmd += ["fetch", "origin", self._commit_sha]
-                try:
-                    await run_process(cmd, cwd=self.destination)
-                    self._logger.debug("Successfully fetched latest changes")
-                except subprocess.CalledProcessError as exc:
-                    self._logger.error(
-                        f"Failed to fetch latest changes with exit code {exc}"
-                    )
-                    shutil.rmtree(self.destination)
-                    await self._clone_repo()
-
-                await run_process(
-                    ["git", "checkout", self._commit_sha],
-                    cwd=self.destination,
-                )
-                self._logger.debug(
-                    f"Successfully checked out commit {self._commit_sha}"
-                )
-
-            # Otherwise, pull the latest changes from the branch
-            else:
-                cmd += ["pull", "origin"]
-                if self._branch:
-                    cmd += [self._branch]
-                if self._include_submodules:
-                    cmd += ["--recurse-submodules"]
-                cmd += ["--depth", "1"]
-                try:
-                    await run_process(cmd, cwd=self.destination)
-                    self._logger.debug("Successfully pulled latest changes")
-                except subprocess.CalledProcessError as exc:
-                    self._logger.error(
-                        f"Failed to pull latest changes with exit code {exc}"
-                    )
-                    shutil.rmtree(self.destination)
-                    await self._clone_repo()
+                    cmd += ["pull", "origin"]
+                    if self._branch:
+                        cmd += [self._branch]
+                    if self._include_submodules:
+                        cmd += ["--recurse-submodules"]
+                    cmd += ["--depth", "1"]
+                    try:
+                        await run_process(cmd, cwd=self.destination, env=git_env)
+                        self._logger.debug("Successfully pulled latest changes")
+                    except subprocess.CalledProcessError as exc:
+                        self._logger.error(
+                            f"Failed to pull latest changes with exit code {exc}"
+                        )
+                        shutil.rmtree(self.destination)
+                        await self._clone_repo()
+            finally:
+                if credential_script and os.path.exists(credential_script):
+                    os.unlink(credential_script)
 
         else:
             await self._clone_repo()
@@ -353,7 +393,8 @@ class GitRepository:
         """
         self._logger.debug("Cloning repository %s", self._url)
 
-        repository_url = self._repository_url_with_credentials
+        # Use clean URL without credentials
+        repository_url = self._url
         cmd = ["git"]
         # Add the git configuration, must be given after `git` and before the command
         cmd += self._git_config
@@ -380,20 +421,19 @@ class GitRepository:
         # Set path to clone to
         cmd += [str(self.destination)]
 
+        # Get secure environment for credentials
+        git_env = self._get_git_env()
+        credential_script = git_env.get("GIT_ASKPASS")
+
         try:
-            await run_process(cmd)
+            await run_process(cmd, env=git_env)
         except subprocess.CalledProcessError as exc:
-            # Hide the command used to avoid leaking the access token
-            parsed_url = urlparse(self._url)
-            exc_chain = (
-                None
-                if self._credentials or parsed_url.password or parsed_url.username
-                else exc
-            )
             raise RuntimeError(
-                f"Failed to clone repository {_strip_auth_from_url(self._url)!r} with exit code"
-                f" {exc.returncode}."
-            ) from exc_chain
+                f"Failed to clone repository {self._url!r} with exit code {exc.returncode}."
+            ) from exc
+        finally:
+            if credential_script and os.path.exists(credential_script):
+                os.unlink(credential_script)
 
         if self._commit_sha:
             # Fetch the commit

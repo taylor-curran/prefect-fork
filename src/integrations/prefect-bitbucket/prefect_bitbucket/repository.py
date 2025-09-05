@@ -36,11 +36,14 @@ private_bitbucket_block.save(name="my-private-bitbucket-block")
 """
 
 import io
+import os
+import stat
+import tempfile
 from pathlib import Path
 from shutil import copytree
 from tempfile import TemporaryDirectory
 from typing import Optional, Tuple, Union
-from urllib.parse import quote, urlparse, urlunparse
+from urllib.parse import quote, urlparse
 
 from pydantic import Field, model_validator
 from typing_extensions import Self
@@ -102,38 +105,32 @@ class BitBucketRepository(ReadableDeploymentStorage):
 
         return self
 
-    def _create_repo_url(self) -> str:
-        """Format the URL provided to the `git clone` command.
+    def _create_credential_helper_script(self) -> Optional[str]:
+        """Create a temporary script for GIT_ASKPASS that provides credentials securely."""
+        if self.bitbucket_credentials is None:
+            return None
 
-        For private repos in the cloud:
-        https://x-token-auth:<access-token>@bitbucket.org/<user>/<repo>.git
-        For private repos with a local bitbucket server:
-        https://<username>:<access-token>@<server>/scm/<project>/<repo>.git
+        token = self.bitbucket_credentials.token.get_secret_value()
+        username = self.bitbucket_credentials.username
 
-        All other repos should be the same as `self.repository`.
-        """
-        url_components = urlparse(self.repository)
-        token_is_set = (
-            self.bitbucket_credentials is not None and self.bitbucket_credentials.token
-        )
+        if username is None:
+            username = "x-token-auth"
 
-        # Need a token for private repos
-        if url_components.scheme == "https" and token_is_set:
-            token = self.bitbucket_credentials.token.get_secret_value()
-            username = self.bitbucket_credentials.username
-            if username is None:
-                username = "x-token-auth"
-            # Encode special characters in username and token
-            safe_username = quote(username or "")
-            safe_token = quote(token or "")
-            updated_components = url_components._replace(
-                netloc=f"{safe_username}:{safe_token}@{url_components.netloc}"
-            )
-            full_url = urlunparse(updated_components)
-        else:
-            full_url = self.repository
+        # Encode special characters in username and token
+        safe_username = quote(username or "")
+        safe_token = quote(token or "")
+        credential_string = f"{safe_username}:{safe_token}"
 
-        return full_url
+        script_content = f'''#!/bin/bash
+echo "{credential_string}"
+'''
+
+        fd, script_path = tempfile.mkstemp(suffix=".sh", prefix="git_askpass_")
+        with os.fdopen(fd, "w") as f:
+            f.write(script_content)
+
+        os.chmod(script_path, stat.S_IRWXU)
+        return script_path
 
     @staticmethod
     def _get_paths(
@@ -173,7 +170,7 @@ class BitBucketRepository(ReadableDeploymentStorage):
 
         """
         # Construct command
-        cmd = ["git", "clone", self._create_repo_url()]
+        cmd = ["git", "clone", self.repository]
         if self.reference:
             cmd += ["-b", self.reference]
 
@@ -184,12 +181,24 @@ class BitBucketRepository(ReadableDeploymentStorage):
         with TemporaryDirectory(suffix="prefect") as tmp_dir:
             cmd.append(tmp_dir)
 
-            err_stream = io.StringIO()
-            out_stream = io.StringIO()
-            process = await run_process(cmd, stream_output=(out_stream, err_stream))
-            if process.returncode != 0:
-                err_stream.seek(0)
-                raise OSError(f"Failed to pull from remote:\n {err_stream.read()}")
+            env = {}
+            credential_script = self._create_credential_helper_script()
+            if credential_script:
+                env["GIT_ASKPASS"] = credential_script
+                env["GIT_TERMINAL_PROMPT"] = "0"
+
+            try:
+                err_stream = io.StringIO()
+                out_stream = io.StringIO()
+                process = await run_process(
+                    cmd, stream_output=(out_stream, err_stream), env=env
+                )
+                if process.returncode != 0:
+                    err_stream.seek(0)
+                    raise OSError(f"Failed to pull from remote:\n {err_stream.read()}")
+            finally:
+                if credential_script and os.path.exists(credential_script):
+                    os.unlink(credential_script)
 
             content_source, content_destination = self._get_paths(
                 dst_dir=local_path, src_dir=tmp_dir, sub_directory=from_path
