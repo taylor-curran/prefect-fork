@@ -8,13 +8,15 @@ GitHub query_repository* tasks and the GitHub storage block.
 # is outdated, rerun scripts/generate.py.
 
 import io
+import os
 import shlex
 import shutil
+import stat
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Dict, Iterable, Optional, Tuple, Union
-from urllib.parse import urlparse, urlunparse
 
 from pydantic import Field
 from sgqlc.operation import Operation
@@ -58,23 +60,23 @@ class GitHubRepository(ReadableDeploymentStorage):
         description="An optional GitHubCredentials block for using private GitHub repos.",  # noqa: E501
     )
 
-    def _create_repo_url(self) -> str:
-        """Format the URL provided to the `git clone` command.
+    def _create_credential_helper_script(self) -> Optional[str]:
+        """Create a temporary script for GIT_ASKPASS that provides credentials securely."""
+        if self.credentials is None:
+            return None
 
-        For private repos: https://<oauth-key>@github.com/<username>/<repo>.git
-        All other repos should be the same as `self.repository`.
-        """
-        url_components = urlparse(self.repository_url)
-        if url_components.scheme == "https" and self.credentials is not None:
-            token_value = self.credentials.token.get_secret_value()
-            updated_components = url_components._replace(
-                netloc=f"{token_value}@{url_components.netloc}"
-            )
-            full_url = urlunparse(updated_components)
-        else:
-            full_url = self.repository_url
+        token_value = self.credentials.token.get_secret_value()
 
-        return full_url
+        script_content = f'''#!/bin/bash
+echo "{token_value}"
+'''
+
+        fd, script_path = tempfile.mkstemp(suffix=".sh", prefix="git_askpass_")
+        with os.fdopen(fd, "w") as f:
+            f.write(script_content)
+
+        os.chmod(script_path, stat.S_IRWXU)
+        return script_path
 
     @staticmethod
     def _get_paths(
@@ -111,7 +113,7 @@ class GitHubRepository(ReadableDeploymentStorage):
             local_path: A local path to clone to; defaults to present working directory.
         """
         # CONSTRUCT COMMAND
-        cmd = f"git clone {self._create_repo_url()}"
+        cmd = f"git clone {self.repository_url}"
         if self.reference:
             cmd += f" -b {self.reference}"
 
@@ -125,12 +127,26 @@ class GitHubRepository(ReadableDeploymentStorage):
             cmd += f' "{tmp_path_str}"'
             cmd = shlex.split(cmd)
 
-            err_stream = io.StringIO()
-            out_stream = io.StringIO()
-            process = await run_process(cmd, stream_output=(out_stream, err_stream))
-            if process.returncode != 0:
-                err_stream.seek(0)
-                raise RuntimeError(f"Failed to pull from remote:\n {err_stream.read()}")
+            env = {}
+            credential_script = self._create_credential_helper_script()
+            if credential_script:
+                env["GIT_ASKPASS"] = credential_script
+                env["GIT_TERMINAL_PROMPT"] = "0"
+
+            try:
+                err_stream = io.StringIO()
+                out_stream = io.StringIO()
+                process = await run_process(
+                    cmd, stream_output=(out_stream, err_stream), env=env
+                )
+                if process.returncode != 0:
+                    err_stream.seek(0)
+                    raise RuntimeError(
+                        f"Failed to pull from remote:\n {err_stream.read()}"
+                    )
+            finally:
+                if credential_script and os.path.exists(credential_script):
+                    os.unlink(credential_script)
 
             content_source, content_destination = self._get_paths(
                 dst_dir=local_path, src_dir=tmp_path_str, sub_directory=from_path

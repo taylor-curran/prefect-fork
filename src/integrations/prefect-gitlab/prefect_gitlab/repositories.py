@@ -42,8 +42,10 @@ Examples:
 """
 
 import io
+import os
 import shutil
-import urllib.parse
+import stat
+import tempfile
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Optional, Tuple, Union
@@ -98,22 +100,23 @@ class GitLabRepository(ReadableDeploymentStorage):
         "private GitLab repos.",
     )
 
-    def _create_repo_url(self) -> str:
-        """Format the URL provided to the `git clone` command.
-        For private repos: https://<oauth-key>@gitlab.com/<username>/<repo>.git
-        All other repos should be the same as `self.repository`.
-        """
-        url_components = urllib.parse.urlparse(self.repository)
-        if url_components.scheme in ["https", "http"] and self.credentials is not None:
-            token = self.credentials.token.get_secret_value()
-            updated_components = url_components._replace(
-                netloc=f"oauth2:{token}@{url_components.netloc}"
-            )
-            full_url = urllib.parse.urlunparse(updated_components)
-        else:
-            full_url = self.repository
+    def _create_credential_helper_script(self) -> Optional[str]:
+        """Create a temporary script for GIT_ASKPASS that provides credentials securely."""
+        if self.credentials is None:
+            return None
 
-        return full_url
+        token = self.credentials.token.get_secret_value()
+
+        script_content = f"""#!/bin/bash
+echo "oauth2:{token}"
+"""
+
+        fd, script_path = tempfile.mkstemp(suffix=".sh", prefix="git_askpass_")
+        with os.fdopen(fd, "w") as f:
+            f.write(script_content)
+
+        os.chmod(script_path, stat.S_IRWXU)
+        return script_path
 
     @staticmethod
     def _get_paths(
@@ -158,7 +161,7 @@ class GitLabRepository(ReadableDeploymentStorage):
             local_path: A local path to clone to; defaults to present working directory.
         """
         # CONSTRUCT COMMAND
-        cmd = ["git", "clone", self._create_repo_url()]
+        cmd = ["git", "clone", self.repository]
         if self.reference:
             cmd += ["-b", self.reference]
 
@@ -170,12 +173,24 @@ class GitLabRepository(ReadableDeploymentStorage):
         with TemporaryDirectory(suffix="prefect") as tmp_dir:
             cmd.append(tmp_dir)
 
-            err_stream = io.StringIO()
-            out_stream = io.StringIO()
-            process = await run_process(cmd, stream_output=(out_stream, err_stream))
-            if process.returncode != 0:
-                err_stream.seek(0)
-                raise OSError(f"Failed to pull from remote:\n {err_stream.read()}")
+            env = {}
+            credential_script = self._create_credential_helper_script()
+            if credential_script:
+                env["GIT_ASKPASS"] = credential_script
+                env["GIT_TERMINAL_PROMPT"] = "0"
+
+            try:
+                err_stream = io.StringIO()
+                out_stream = io.StringIO()
+                process = await run_process(
+                    cmd, stream_output=(out_stream, err_stream), env=env
+                )
+                if process.returncode != 0:
+                    err_stream.seek(0)
+                    raise OSError(f"Failed to pull from remote:\n {err_stream.read()}")
+            finally:
+                if credential_script and os.path.exists(credential_script):
+                    os.unlink(credential_script)
 
             content_source, content_destination = self._get_paths(
                 dst_dir=local_path, src_dir=tmp_dir, sub_directory=from_path

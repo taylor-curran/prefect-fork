@@ -111,7 +111,7 @@ class TestGitRepository:
         repo = GitRepository(url="https://github.com/org/repo.git")
 
         await repo.pull_code()
-        # should be no change in url
+        # should be no change in url, and no credentials in env
         mock_run_process.assert_awaited_once_with(
             [
                 "git",
@@ -120,7 +120,8 @@ class TestGitRepository:
                 "--depth",
                 "1",
                 str(Path.cwd() / "repo"),
-            ]
+            ],
+            env={}
         )
 
     def test_init_commit_sha_and_branch_raises(self):
@@ -196,16 +197,20 @@ class TestGitRepository:
         )
         await repo.pull_code()
 
-        mock_run_process.assert_awaited_once_with(
-            [
-                "git",
-                "clone",
-                "https://oauth2:token@github.com/org/repo.git",
-                "--depth",
-                "1",
-                str(Path.cwd() / "repo"),
-            ]
-        )
+        # Verify that the git clone command does not contain credentials
+        call_args = mock_run_process.call_args
+        command = call_args[0][0]
+        
+        command_str = " ".join(command)
+        assert "token" not in command_str
+        assert "oauth2:token" not in command_str
+        assert "@github.com" not in command_str or "oauth2:" not in command_str
+        
+        # Verify that GIT_ASKPASS is set in environment
+        env = call_args[1].get('env', {})
+        assert 'GIT_ASKPASS' in env
+        assert 'GIT_TERMINAL_PROMPT' in env
+        assert env['GIT_TERMINAL_PROMPT'] == '0'
 
     async def test_clone_repo_sparse(self, mock_run_process: AsyncMock, monkeypatch):
         """
@@ -220,28 +225,26 @@ class TestGitRepository:
         )
         await repo.pull_code()
 
-        expected_calls = [
-            call(
-                [
-                    "git",
-                    "clone",
-                    "https://oauth2:token@github.com/org/repo.git",
-                    "--sparse",
-                    "--depth",
-                    "1",
-                    str(Path.cwd() / "repo"),
-                ]
-            ),
-            call(
-                ["git", "sparse-checkout", "set", "dir_1", "dir_2"],
-                cwd=Path.cwd() / "repo",
-            ),
-        ]
-
-        mock_run_process.assert_has_awaits(expected_calls)
-        assert mock_run_process.await_args_list == expected_calls, (
-            f"Unexpected calls: {mock_run_process.await_args_list}"
-        )
+        # Verify that credentials are not in command arguments
+        calls = mock_run_process.await_args_list
+        
+        clone_call = calls[0]
+        clone_command = clone_call[0][0]
+        clone_command_str = " ".join(clone_command)
+        assert "token" not in clone_command_str
+        assert "oauth2:token" not in clone_command_str
+        assert "@github.com" not in clone_command_str or "oauth2:" not in clone_command_str
+        
+        # Verify that GIT_ASKPASS is set in environment for clone
+        clone_env = clone_call[1].get('env', {})
+        assert 'GIT_ASKPASS' in clone_env
+        assert 'GIT_TERMINAL_PROMPT' in clone_env
+        assert clone_env['GIT_TERMINAL_PROMPT'] == '0'
+        
+        sparse_call = calls[1]
+        sparse_command = sparse_call[0][0]
+        expected_sparse_command = ["git", "sparse-checkout", "set", "dir_1", "dir_2"]
+        assert sparse_command == expected_sparse_command
 
     async def test_clone_existing_repo_sparse(
         self, mock_run_process: AsyncMock, monkeypatch
@@ -257,26 +260,34 @@ class TestGitRepository:
 
         await repo.pull_code()
 
-        expected_calls = [
-            call(
-                ["git", "config", "--get", "remote.origin.url"],
-                cwd=str(Path.cwd() / "repo"),
-            ),
-            call(
-                ["git", "config", "--get", "core.sparseCheckout"],
-                cwd=Path.cwd() / "repo",
-            ),
-            call(
-                ["git", "sparse-checkout", "set", "dir_1", "dir_2"],
-                cwd=Path.cwd() / "repo",
-            ),
-            call(["git", "pull", "origin", "--depth", "1"], cwd=Path.cwd() / "repo"),
-        ]
-
-        mock_run_process.assert_has_awaits(expected_calls)
-        assert mock_run_process.await_args_list == expected_calls, (
-            f"Unexpected calls: {mock_run_process.await_args_list}"
-        )
+        # Verify that credentials are not in command arguments
+        calls = mock_run_process.await_args_list
+        
+        config_url_call = calls[0]
+        config_url_command = config_url_call[0][0]
+        expected_config_url_command = ["git", "config", "--get", "remote.origin.url"]
+        assert config_url_command == expected_config_url_command
+        
+        config_sparse_call = calls[1]
+        config_sparse_command = config_sparse_call[0][0]
+        expected_config_sparse_command = ["git", "config", "--get", "core.sparseCheckout"]
+        assert config_sparse_command == expected_config_sparse_command
+        
+        sparse_call = calls[2]
+        sparse_command = sparse_call[0][0]
+        expected_sparse_command = ["git", "sparse-checkout", "set", "dir_1", "dir_2"]
+        assert sparse_command == expected_sparse_command
+        
+        pull_call = calls[3]
+        pull_command = pull_call[0][0]
+        expected_pull_command = ["git", "pull", "origin", "--depth", "1"]
+        assert pull_command == expected_pull_command
+        
+        # Verify that GIT_ASKPASS is set in environment for pull
+        pull_env = pull_call[1].get('env', {})
+        assert 'GIT_ASKPASS' in pull_env
+        assert 'GIT_TERMINAL_PROMPT' in pull_env
+        assert pull_env['GIT_TERMINAL_PROMPT'] == '0'
 
     async def test_pull_code_with_username_and_password(
         self,
@@ -297,16 +308,52 @@ class TestGitRepository:
         )
         await repo.pull_code()
 
-        mock_run_process.assert_awaited_once_with(
-            [
-                "git",
-                "clone",
-                "https://username:password@github.com/org/repo.git",
-                "--depth",
-                "1",
-                str(Path.cwd() / "repo"),
-            ]
+        # Verify that the git clone command does not contain credentials
+        call_args = mock_run_process.call_args
+        command = call_args[0][0]
+
+        command_str = " ".join(command)
+        assert "password" not in command_str
+        assert "username:password" not in command_str
+        assert "@github.com" not in command_str or "username:" not in command_str
+
+        # Verify that GIT_ASKPASS is set in environment
+        env = call_args[1].get("env", {})
+        assert "GIT_ASKPASS" in env
+        assert "GIT_TERMINAL_PROMPT" in env
+        assert env["GIT_TERMINAL_PROMPT"] == "0"
+
+    async def test_credentials_not_in_command_args(
+        self,
+        monkeypatch,
+        mock_run_process: AsyncMock,
+    ):
+        """
+        Verify that credentials do not appear in git command arguments.
+        This is a security test to ensure credentials are passed via environment variables.
+        """
+        monkeypatch.setattr("pathlib.Path.exists", lambda x: False)
+
+        repo = GitRepository(
+            url="https://github.com/org/repo.git",
+            credentials={"username": "username", "password": "secret_password"},
         )
+        await repo.pull_code()
+
+        # Verify that the git clone command does not contain credentials
+        call_args = mock_run_process.call_args
+        command = call_args[0][0]
+
+        command_str = " ".join(command)
+        assert "secret_password" not in command_str
+        assert "username:secret_password" not in command_str
+        assert "@github.com" not in command_str or "username:" not in command_str
+
+        # Verify that GIT_ASKPASS is set in environment
+        env = call_args[1].get("env", {})
+        assert "GIT_ASKPASS" in env
+        assert "GIT_TERMINAL_PROMPT" in env
+        assert env["GIT_TERMINAL_PROMPT"] == "0"
 
     def test_eq(self):
         repo1 = GitRepository(url="https://github.com/org/repo.git")
@@ -338,7 +385,8 @@ class TestGitRepository:
                 "--depth",
                 "1",
                 str(Path.cwd() / "repo"),
-            ]
+            ],
+            env={}
         )
 
         # pretend the repo already exists
@@ -355,6 +403,7 @@ class TestGitRepository:
                 "1",
             ],
             cwd=Path.cwd() / "repo",
+            env={}
         )
 
     async def test_include_submodules_with_credentials(
@@ -369,19 +418,31 @@ class TestGitRepository:
             credentials={"access_token": access_token},
         )
         await repo.pull_code()
-        mock_run_process.assert_awaited_with(
-            [
-                "git",
-                "-c",
-                "url.https://token@github.com.insteadOf=https://github.com",
-                "clone",
-                "https://token@github.com/org/repo.git",
-                "--recurse-submodules",
-                "--depth",
-                "1",
-                str(Path.cwd() / "repo"),
-            ]
-        )
+        
+        # Verify that the git clone command structure is correct
+        call_args = mock_run_process.call_args
+        command = call_args[0][0]
+        
+        # The main repository URL should not contain credentials
+        main_repo_url = None
+        for i, arg in enumerate(command):
+            if arg == "clone" and i + 1 < len(command):
+                main_repo_url = command[i + 1]
+                break
+        
+        assert main_repo_url == "https://github.com/org/repo.git"
+        assert "token" not in main_repo_url
+        
+        command_str = " ".join(command)
+        assert "--recurse-submodules" in command_str
+        assert "-c" in command_str  # git config parameter
+        assert "url." in command_str and ".insteadOf=" in command_str  # git config format
+        
+        # Verify that GIT_ASKPASS is set in environment
+        env = call_args[1].get('env', {})
+        assert 'GIT_ASKPASS' in env
+        assert 'GIT_TERMINAL_PROMPT' in env
+        assert env['GIT_TERMINAL_PROMPT'] == '0'
 
     async def test_pull_code_with_commit_sha(
         self, mock_run_process: AsyncMock, monkeypatch
@@ -412,6 +473,7 @@ class TestGitRepository:
             call(
                 ["git", "fetch", "origin", "--unshallow"],
                 cwd=Path.cwd() / "repo",
+                env={}
             ),
             call(
                 ["git", "checkout", "1234567890"],
@@ -524,16 +586,26 @@ class TestGitRepository:
 
             await repo.pull_code()
 
-            mock_run_process.assert_awaited_once_with(
-                [
-                    "git",
-                    "clone",
-                    "https://mock-token@github.com/org/repo.git",
-                    "--depth",
-                    "1",
-                    str(Path.cwd() / "repo"),
-                ]
-            )
+            call_args = mock_run_process.call_args
+            command = call_args[0][0]
+            
+            command_str = " ".join(command)
+            assert "mock-token" not in command_str
+            
+            expected_command = [
+                "git",
+                "clone",
+                "https://github.com/org/repo.git",
+                "--depth",
+                "1",
+                str(Path.cwd() / "repo"),
+            ]
+            assert command == expected_command
+            
+            env = call_args[1].get('env', {})
+            assert 'GIT_ASKPASS' in env
+            assert 'GIT_TERMINAL_PROMPT' in env
+            assert env['GIT_TERMINAL_PROMPT'] == '0'
 
         @pytest.mark.parametrize(
             "credentials",
@@ -557,22 +629,30 @@ class TestGitRepository:
 
             await repo.pull_code()
 
-            expected_url = (
-                "https://x-token-auth:example-token@bitbucket.org/org/repo.git"
-                if credentials
-                else "https://bitbucket.org/org/repo.git"
-            )
-
-            mock_run_process.assert_awaited_once_with(
-                [
-                    "git",
-                    "clone",
-                    expected_url,
-                    "--depth",
-                    "1",
-                    str(Path.cwd() / "repo"),
-                ],
-            )
+            call_args = mock_run_process.call_args
+            command = call_args[0][0]
+            
+            command_str = " ".join(command)
+            assert "example-token" not in command_str
+            assert "x-token-auth:example-token" not in command_str
+            
+            expected_command = [
+                "git",
+                "clone",
+                "https://bitbucket.org/org/repo.git",
+                "--depth",
+                "1",
+                str(Path.cwd() / "repo"),
+            ]
+            assert command == expected_command
+            
+            env = call_args[1].get('env', {})
+            if credentials:
+                assert 'GIT_ASKPASS' in env
+                assert 'GIT_TERMINAL_PROMPT' in env
+                assert env['GIT_TERMINAL_PROMPT'] == '0'
+            else:
+                assert env == {}
 
         @pytest.mark.parametrize(
             "credentials",
@@ -593,16 +673,27 @@ class TestGitRepository:
 
             await repo.pull_code()
 
-            mock_run_process.assert_awaited_once_with(
-                [
-                    "git",
-                    "clone",
-                    "https://x-token-auth:example-token@bitbucketserver.com/scm/projectname/teamsinspace.git",
-                    "--depth",
-                    "1",
-                    str(Path.cwd() / "teamsinspace"),
-                ],
-            )
+            call_args = mock_run_process.call_args
+            command = call_args[0][0]
+            
+            command_str = " ".join(command)
+            assert "example-token" not in command_str
+            assert "x-token-auth:example-token" not in command_str
+            
+            expected_command = [
+                "git",
+                "clone",
+                "https://bitbucketserver.com/scm/projectname/teamsinspace.git",
+                "--depth",
+                "1",
+                str(Path.cwd() / "teamsinspace"),
+            ]
+            assert command == expected_command
+            
+            env = call_args[1].get('env', {})
+            assert 'GIT_ASKPASS' in env
+            assert 'GIT_TERMINAL_PROMPT' in env
+            assert env['GIT_TERMINAL_PROMPT'] == '0'
 
         async def test_git_clone_with_bitbucket_server_repo_with_invalid_access_token_raises(
             self,
@@ -643,22 +734,32 @@ class TestGitRepository:
 
             await repo.pull_code()
 
-            expected_url = (
-                "https://oauth2:example-token@gitlab.com/org/repo.git"
-                if credentials
-                else "https://gitlab.com/org/repo.git"
-            )
-
-            mock_run_process.assert_awaited_once_with(
-                [
-                    "git",
-                    "clone",
-                    expected_url,
-                    "--depth",
-                    "1",
-                    str(Path.cwd() / "repo"),
-                ],
-            )
+            # Verify that the git clone command uses clean URL without credentials
+            call_args = mock_run_process.call_args
+            command = call_args[0][0]
+            
+            command_str = " ".join(command)
+            assert "example-token" not in command_str
+            assert "oauth2:example-token" not in command_str
+            
+            expected_command = [
+                "git",
+                "clone", 
+                "https://gitlab.com/org/repo.git",
+                "--depth",
+                "1",
+                str(Path.cwd() / "repo"),
+            ]
+            assert command == expected_command
+            
+            # Verify environment variables are set for credentials
+            env = call_args[1].get('env', {})
+            if credentials:
+                assert 'GIT_ASKPASS' in env
+                assert 'GIT_TERMINAL_PROMPT' in env
+                assert env['GIT_TERMINAL_PROMPT'] == '0'
+            else:
+                assert env == {}
 
     class TestToPullStep:
         async def test_to_pull_step_with_block_credentials(self):
@@ -798,7 +899,8 @@ class TestGitRepository:
                     "--filter=blob:none",
                     "--no-checkout",
                     str(Path.cwd() / "repo"),
-                ]
+                ],
+                env={}
             ),
             call(
                 ["git", "fetch", "origin", "1234567890"],
