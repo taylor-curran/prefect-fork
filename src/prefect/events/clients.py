@@ -653,7 +653,7 @@ class PrefectEventSubscriber:
             except ConnectionClosedOK:
                 logger.debug('Connection closed with "OK" status')
                 raise StopAsyncIteration
-            except ConnectionClosed:
+            except (ConnectionClosed, ConnectionClosedError):
                 logger.debug(
                     "Connection closed with %s/%s attempts",
                     i + 1,
