@@ -5,7 +5,6 @@ import datetime
 import inspect
 import logging
 import threading
-import time
 from asyncio import CancelledError
 from contextlib import ExitStack, asynccontextmanager, contextmanager, nullcontext
 from dataclasses import dataclass, field
@@ -52,6 +51,8 @@ from prefect.context import (
     TaskRunContext,
     hydrated_context,
 )
+from prefect.events.clients import get_events_subscriber
+from prefect.events.filters import EventFilter, EventNameFilter
 from prefect.events.schemas.events import Event as PrefectEvent
 from prefect.exceptions import (
     Abort,
@@ -101,7 +102,6 @@ from prefect.utilities.engine import (
     link_state_to_task_run_result,
     resolve_to_final_result,
 )
-from prefect.utilities.math import clamped_poisson_interval
 from prefect.utilities.timeout import timeout, timeout_async
 
 if TYPE_CHECKING:
@@ -111,6 +111,7 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 BACKOFF_MAX = 10
+MAX_WAIT_TIMEOUT = 30  # seconds
 
 
 class TaskRunTimeoutError(TimeoutError):
@@ -394,6 +395,36 @@ class SyncTaskRunEngine(BaseTaskRunEngine[P, R]):
             else:
                 self.logger.info(f"Hook {hook_name!r} finished running successfully")
 
+    @contextmanager
+    def _create_state_change_listener(self, task_run_id, target_states=None):
+        if target_states is None:
+            target_states = ["Running"]
+        
+        event_names = [f"prefect.task-run.{state}" for state in target_states]
+        event_filter = EventFilter(
+            event=EventNameFilter(name=event_names),
+            resource={"prefect.resource.id": f"prefect.task-run.{task_run_id}"}
+        )
+        
+        state_changed = threading.Event()
+        
+        def event_listener():
+            try:
+                with get_events_subscriber(filter=event_filter) as subscriber:
+                    for event in subscriber:
+                        state_changed.set()
+                        break
+            except Exception as e:
+                self.logger.debug(f"Event listener error: {e}")
+        
+        listener_thread = threading.Thread(target=event_listener, daemon=True)
+        listener_thread.start()
+        
+        try:
+            yield state_changed
+        finally:
+            pass
+
     def begin_run(self) -> None:
         new_state = Running()
 
@@ -418,16 +449,9 @@ class SyncTaskRunEngine(BaseTaskRunEngine[P, R]):
             except Exception:
                 state = self.set_state(new_state, force=True)
 
-        backoff_count = 0
-
-        # TODO: Could this listen for state change events instead of polling?
-        while state.is_pending() or state.is_paused():
-            if backoff_count < BACKOFF_MAX:
-                backoff_count += 1
-            interval = clamped_poisson_interval(
-                average_interval=backoff_count, clamping_factor=0.3
-            )
-            time.sleep(interval)
+        with self._create_state_change_listener(self.task_run.id, target_states=["Running"]) as event:
+            if not event.wait(timeout=MAX_WAIT_TIMEOUT):
+                self.logger.debug("Event timeout, falling back to state check")
             state = self.set_state(new_state)
 
     def set_state(self, state: State[R], force: bool = False) -> State[R]:
@@ -971,6 +995,39 @@ class AsyncTaskRunEngine(BaseTaskRunEngine[P, R]):
             else:
                 self.logger.info(f"Hook {hook_name!r} finished running successfully")
 
+    @asynccontextmanager
+    async def _create_async_state_change_listener(self, task_run_id, target_states=None):
+        if target_states is None:
+            target_states = ["Running"]
+        
+        event_names = [f"prefect.task-run.{state}" for state in target_states]
+        event_filter = EventFilter(
+            event=EventNameFilter(name=event_names),
+            resource={"prefect.resource.id": f"prefect.task-run.{task_run_id}"}
+        )
+        
+        state_changed = asyncio.Event()
+        
+        async def event_listener():
+            try:
+                async with get_events_subscriber(filter=event_filter) as subscriber:
+                    async for event in subscriber:
+                        state_changed.set()
+                        break
+            except Exception as e:
+                self.logger.debug(f"Event listener error: {e}")
+        
+        listener_task = asyncio.create_task(event_listener())
+        
+        try:
+            yield state_changed
+        finally:
+            listener_task.cancel()
+            try:
+                await listener_task
+            except asyncio.CancelledError:
+                pass
+
     async def begin_run(self) -> None:
         try:
             self._resolve_parameters()
@@ -1009,16 +1066,11 @@ class AsyncTaskRunEngine(BaseTaskRunEngine[P, R]):
             except Exception:
                 state = await self.set_state(new_state, force=True)
 
-        backoff_count = 0
-
-        # TODO: Could this listen for state change events instead of polling?
-        while state.is_pending() or state.is_paused():
-            if backoff_count < BACKOFF_MAX:
-                backoff_count += 1
-            interval = clamped_poisson_interval(
-                average_interval=backoff_count, clamping_factor=0.3
-            )
-            await anyio.sleep(interval)
+        async with self._create_async_state_change_listener(self.task_run.id, target_states=["Running"]) as event:
+            try:
+                await asyncio.wait_for(event.wait(), timeout=MAX_WAIT_TIMEOUT)
+            except asyncio.TimeoutError:
+                self.logger.debug("Event timeout, falling back to state check")
             state = await self.set_state(new_state)
 
     async def set_state(self, state: State, force: bool = False) -> State:
