@@ -26,7 +26,7 @@ app.add_typer(flow_app, aliases=["flows"])
 @flow_app.command()
 async def ls(
     limit: int = 15,
-):
+) -> None:
     """
     View flows.
     """
@@ -135,7 +135,7 @@ async def serve(
             " flow instances associated with the same deployment."
         ),
     ),
-):
+) -> None:
     """
     Serve a flow via an entrypoint.
     """
