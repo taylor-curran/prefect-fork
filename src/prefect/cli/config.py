@@ -36,7 +36,7 @@ app.add_typer(config_app)
 
 
 @config_app.command("set")
-def set_(settings: list[str]):
+def set_(settings: list[str]) -> None:
     """
     Change the value for a setting by setting the value in the current profile.
     """
@@ -82,7 +82,7 @@ def set_(settings: list[str]):
 
 
 @config_app.command()
-def validate():
+def validate() -> None:
     """
     Read and validate the current profile.
 
@@ -99,7 +99,9 @@ def validate():
 
 
 @config_app.command()
-def unset(setting_names: list[str], confirm: bool = typer.Option(False, "--yes", "-y")):
+def unset(
+    setting_names: list[str], confirm: bool = typer.Option(False, "--yes", "-y")
+) -> None:
     """
     Restore the default value for a setting.
 
@@ -184,7 +186,7 @@ def view(
         "--show-secrets/--hide-secrets",
         help="Toggle display of secrets setting values.",
     ),
-):
+) -> None:
     """
     Display the current settings.
     """
@@ -213,13 +215,15 @@ def view(
         source: Literal[
             "env", "profile", "defaults", ".env file", "prefect.toml", "pyproject.toml"
         ],
-    ):
+    ) -> None:
         display_value = "********" if setting.is_secret and not show_secrets else value
         source_blurb = f" (from {source})" if show_sources else ""
         settings_output.append(f"{setting.name}='{display_value}'{source_blurb}")
         processed_settings.add(setting.name)
 
-    def _collect_defaults(default_values: dict[str, Any], current_path: list[str]):
+    def _collect_defaults(
+        default_values: dict[str, Any], current_path: list[str]
+    ) -> None:
         for key, value in default_values.items():
             if isinstance(value, dict):
                 _collect_defaults(cast(dict[str, Any], value), current_path + [key])
@@ -235,7 +239,7 @@ def view(
         settings: dict[str, Any],
         base_path: list[str],
         source: Literal["prefect.toml", "pyproject.toml"],
-    ):
+    ) -> None:
         for key, value in settings.items():
             if isinstance(value, dict):
                 _process_toml_settings(
