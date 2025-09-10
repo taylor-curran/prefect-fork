@@ -11,8 +11,8 @@ from prefect._result_records import ResultRecordMetadata
 from prefect.flow_runs import pause_flow_run, resume_flow_run, suspend_flow_run
 from prefect.client.orchestration import get_client
 from prefect.client.cloud import get_cloud_client
-import prefect.variables  # pyright: ignore[reportUnusedImport] # TODO: Does this need to be imported here?
-import prefect.runtime  # pyright: ignore[reportUnusedImport] # TODO: Does this need to be imported here?
+import prefect.variables  # pyright: ignore[reportUnusedImport] # Required for backward compatibility migration system (important-comment)
+import prefect.runtime  # pyright: ignore[reportUnusedImport] # Required to enable 'from prefect import runtime' pattern (important-comment)
 
 # Import modules that register types
 import prefect.serializers  # pyright: ignore[reportUnusedImport]
