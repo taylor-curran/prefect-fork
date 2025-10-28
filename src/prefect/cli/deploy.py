@@ -1302,7 +1302,7 @@ def _handle_pick_deploy_without_name(
     return [selected_deploy_config] if selected_deploy_config else []
 
 
-def _log_missing_deployment_names(missing_names, matched_deploy_configs, names):
+def _log_missing_deployment_names(missing_names, matched_deploy_configs, names) -> None:
     # Log unfound names
     if missing_names:
         app.console.print(
@@ -1698,7 +1698,7 @@ def _gather_deployment_trigger_definitions(
     return existing_triggers
 
 
-def _handle_deprecated_schedule_fields(deploy_config: dict[str, Any]):
+def _handle_deprecated_schedule_fields(deploy_config: dict[str, Any]) -> dict[str, Any]:
     deploy_config = deepcopy(deploy_config)
 
     legacy_schedule = deploy_config.get("schedule", NotSet)

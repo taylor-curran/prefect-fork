@@ -36,7 +36,7 @@ app.add_typer(config_app)
 
 
 @config_app.command("set")
-def set_(settings: list[str]):
+def set_(settings: list[str]) -> None:
     """
     Change the value for a setting by setting the value in the current profile.
     """
@@ -82,7 +82,7 @@ def set_(settings: list[str]):
 
 
 @config_app.command()
-def validate():
+def validate() -> None:
     """
     Read and validate the current profile.
 
@@ -99,7 +99,9 @@ def validate():
 
 
 @config_app.command()
-def unset(setting_names: list[str], confirm: bool = typer.Option(False, "--yes", "-y")):
+def unset(
+    setting_names: list[str], confirm: bool = typer.Option(False, "--yes", "-y")
+) -> None:
     """
     Restore the default value for a setting.
 
@@ -184,7 +186,7 @@ def view(
         "--show-secrets/--hide-secrets",
         help="Toggle display of secrets setting values.",
     ),
-):
+) -> None:
     """
     Display the current settings.
     """

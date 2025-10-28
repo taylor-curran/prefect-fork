@@ -37,7 +37,7 @@ _OLD_MINIMAL_DEFAULT_PROFILE_CONTENT: str = """active = "default"
 
 
 @profile_app.command()
-def ls():
+def ls() -> None:
     """
     List profile names.
     """
@@ -110,7 +110,7 @@ def create(
 
 
 @profile_app.command()
-async def use(name: str):
+async def use(name: str) -> None:
     """
     Set the given profile to active.
     """
@@ -181,7 +181,7 @@ async def use(name: str):
 
 
 @profile_app.command()
-def delete(name: str):
+def delete(name: str) -> None:
     """
     Delete the given profile.
     """
@@ -207,7 +207,7 @@ def delete(name: str):
 
 
 @profile_app.command()
-def rename(name: str, new_name: str):
+def rename(name: str, new_name: str) -> None:
     """
     Change the name of a profile.
     """
@@ -311,7 +311,7 @@ def show_profile_changes(
 
 
 @profile_app.command()
-def populate_defaults():
+def populate_defaults() -> None:
     """Populate the profiles configuration with default base profiles, preserving existing user profiles."""
     from prefect.settings.profiles import (
         _read_profiles_from,  # type: ignore[reportPrivateUsage]

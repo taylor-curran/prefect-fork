@@ -595,7 +595,7 @@ async def login(
 
 
 @cloud_app.command()
-async def logout():
+async def logout() -> None:
     """
     Logout the current workspace.
     Reset PREFECT_API_KEY and PREFECT_API_URL to default.
@@ -621,7 +621,7 @@ async def logout():
     deprecated_start_date=datetime(2024, 10, 1),
     deprecated_help="Use `prefect dashboard open` to open the Prefect UI.",
 )
-async def open():
+async def open() -> None:
     """
     Open the Prefect Cloud UI in the browser.
     """
@@ -644,7 +644,7 @@ async def open():
 
 
 @workspace_app.command()
-async def ls():
+async def ls() -> None:
     """List available workspaces."""
 
     confirm_logged_in()

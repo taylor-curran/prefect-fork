@@ -54,7 +54,7 @@ def exit_with_error_if_not_editable_install() -> None:
 
 
 @dev_app.command()
-def build_docs(schema_path: Optional[str] = None):
+def build_docs(schema_path: Optional[str] = None) -> None:
     """
     Builds REST API reference documentation for static display.
     """
@@ -85,7 +85,7 @@ Installs dependencies and builds UI locally. Requires npm.
 @dev_app.command(help=BUILD_UI_HELP)
 def build_ui(
     no_install: bool = False,
-):
+) -> None:
     exit_with_error_if_not_editable_install()
     with tmpchdir(prefect.__development_base_path__ / "ui"):
         if not no_install:
@@ -115,7 +115,7 @@ def build_ui(
 
 
 @dev_app.command()
-async def ui():
+async def ui() -> None:
     """
     Starts a hot-reloading development UI.
     """
@@ -134,7 +134,7 @@ async def api(
     port: int = SettingsOption(PREFECT_SERVER_API_PORT),
     log_level: str = "DEBUG",
     services: bool = True,
-):
+) -> None:
     """
     Starts a hot-reloading development API.
     """
@@ -200,7 +200,7 @@ async def api(
 async def start(
     exclude_api: bool = typer.Option(False, "--no-api"),
     exclude_ui: bool = typer.Option(False, "--no-ui"),
-):
+) -> None:
     """
     Starts a hot-reloading development server with API, UI, and agent processes.
 
@@ -249,7 +249,7 @@ def build_image(
         ),
     ),
     dry_run: bool = False,
-):
+) -> None:
     """
     Build a docker image for development.
     """
@@ -295,7 +295,7 @@ def build_image(
 @dev_app.command()
 def container(
     bg: bool = False, name="prefect-dev", api: bool = True, tag: Optional[str] = None
-):
+) -> None:
     """
     Run a docker container with local code mounted and installed.
     """

@@ -224,7 +224,7 @@ async def inspect(
         "-o",
         help="Specify an output format. Currently supports: json",
     ),
-):
+) -> None:
     """
     View details about a deployment.
 
@@ -348,7 +348,7 @@ async def create_schedule(
         "-y",
         help="Accept the confirmation prompt without prompting",
     ),
-):
+) -> None:
     """
     Create a schedule for a given deployment.
     """
@@ -471,7 +471,7 @@ async def delete_schedule(
         "-y",
         help="Accept the confirmation prompt without prompting",
     ),
-):
+) -> None:
     """
     Delete a deployment schedule.
     """
@@ -502,7 +502,7 @@ async def delete_schedule(
 
 
 @schedule_app.command("pause")
-async def pause_schedule(deployment_name: str, schedule_id: UUID):
+async def pause_schedule(deployment_name: str, schedule_id: UUID) -> None:
     """
     Pause a deployment schedule.
     """

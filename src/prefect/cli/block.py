@@ -170,7 +170,7 @@ async def register(
         "-f",
         help="Path to .py file containing block types to be registered",
     ),
-):
+) -> None:
     """
     Register blocks types within a module or file.
 
@@ -255,7 +255,7 @@ async def register(
 
 
 @blocks_app.command("ls")
-async def block_ls():
+async def block_ls() -> None:
     """
     View all configured blocks.
     """
@@ -289,7 +289,7 @@ async def block_delete(
         None, help="A block slug. Formatted as '<BLOCK_TYPE_SLUG>/<BLOCK_NAME>'"
     ),
     block_id: Optional[UUID] = typer.Option(None, "--id", help="A block id."),
-):
+) -> None:
     """
     Delete a configured block.
     """
@@ -335,7 +335,7 @@ async def block_create(
         help="A block type slug. View available types with: prefect block type ls",
         show_default=False,
     ),
-):
+) -> None:
     """
     Generate a link to the Prefect UI to create a block.
     """
@@ -373,7 +373,7 @@ async def block_inspect(
     block_id: Optional[UUID] = typer.Option(
         None, "--id", help="A Block id to search for if no slug is given"
     ),
-):
+) -> None:
     """
     Displays details about a configured block.
     """
@@ -403,7 +403,7 @@ async def block_inspect(
 
 
 @blocktypes_app.command("ls")
-async def list_types():
+async def list_types() -> None:
     """
     List all block types.
     """
@@ -438,7 +438,7 @@ async def list_types():
 @blocktypes_app.command("inspect")
 async def blocktype_inspect(
     slug: str = typer.Argument(..., help="A block type slug"),
-):
+) -> None:
     """
     Display details about a block type.
     """
@@ -472,7 +472,7 @@ async def blocktype_inspect(
 @blocktypes_app.command("delete")
 async def blocktype_delete(
     slug: str = typer.Argument(..., help="A Block type slug"),
-):
+) -> None:
     """
     Delete an unprotected Block Type.
     """

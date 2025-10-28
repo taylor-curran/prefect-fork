@@ -62,7 +62,7 @@ async def inspect(
         "-o",
         help="Specify an output format. Currently supports: json",
     ),
-):
+) -> None:
     """
     View details about a flow run.
     """
@@ -104,7 +104,7 @@ async def ls(
     limit: int = typer.Option(15, help="Maximum number of flow runs to list"),
     state: List[str] = typer.Option(None, help="Name of the flow run's state"),
     state_type: List[str] = typer.Option(None, help="Type of the flow run's state"),
-):
+) -> None:
     """
     View recent flow runs or flow runs for specific flows.
 
@@ -221,7 +221,7 @@ async def ls(
 
 
 @flow_run_app.command()
-async def delete(id: UUID):
+async def delete(id: UUID) -> None:
     """
     Delete a flow run by ID.
     """
@@ -240,7 +240,7 @@ async def delete(id: UUID):
 
 
 @flow_run_app.command()
-async def cancel(id: UUID):
+async def cancel(id: UUID) -> None:
     """Cancel a flow run by ID."""
     async with get_client() as client:
         cancelling_state = State(type=StateType.CANCELLING)
@@ -297,7 +297,7 @@ async def logs(
             " all logs."
         ),
     ),
-):
+) -> None:
     """
     View logs for a flow run.
     """
