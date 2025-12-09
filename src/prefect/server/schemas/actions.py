@@ -89,6 +89,10 @@ class DeploymentScheduleCreate(ActionBaseModel):
     active: bool = Field(
         default=True, description="Whether or not the schedule is active."
     )
+    dominant: bool = Field(
+        default=False,
+        description="Whether this schedule is dominant. When a dominant schedule is active, all other schedules for the deployment are automatically disabled.",
+    )
     schedule: schemas.schedules.SCHEDULE_TYPES = Field(
         default=..., description="The schedule for the deployment."
     )
@@ -117,6 +121,10 @@ class DeploymentScheduleCreate(ActionBaseModel):
 class DeploymentScheduleUpdate(ActionBaseModel):
     active: Optional[bool] = Field(
         default=None, description="Whether or not the schedule is active."
+    )
+    dominant: Optional[bool] = Field(
+        default=None,
+        description="Whether this schedule is dominant. When a dominant schedule is active, all other schedules for the deployment are automatically disabled.",
     )
     schedule: Optional[schemas.schedules.SCHEDULE_TYPES] = Field(
         default=None, description="The schedule for the deployment."

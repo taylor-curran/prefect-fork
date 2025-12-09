@@ -554,6 +554,10 @@ class DeploymentSchedule(ORMBaseModel):
     active: bool = Field(
         default=True, description="Whether or not the schedule is active."
     )
+    dominant: bool = Field(
+        default=False,
+        description="Whether this schedule is dominant. When a dominant schedule is active, all other schedules for the deployment are automatically disabled.",
+    )
     max_scheduled_runs: Optional[PositiveInteger] = Field(
         default=None,
         description="The maximum number of scheduled runs for the schedule.",

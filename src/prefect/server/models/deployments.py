@@ -933,11 +933,25 @@ async def create_deployment_schedules(
         schedules: a list of deployment schedule create actions
     """
 
+    dominant_schedule_found = False
     schedules_with_deployment_id: list[dict[str, Any]] = []
     for schedule in schedules:
         data = schedule.model_dump()
         data["deployment_id"] = deployment_id
+
+        if data.get("dominant"):
+            if dominant_schedule_found:
+                data["dominant"] = False
+            else:
+                dominant_schedule_found = True
+                data["active"] = True
+
         schedules_with_deployment_id.append(data)
+
+    if dominant_schedule_found:
+        for schedule_data in schedules_with_deployment_id:
+            if not schedule_data.get("dominant"):
+                schedule_data["active"] = False
 
     models = [
         db.DeploymentSchedule(**schedule) for schedule in schedules_with_deployment_id
@@ -1005,6 +1019,11 @@ async def update_deployment_schedule(
         deployment_schedule_id: a deployment schedule id
         schedule: a deployment schedule update action
     """
+    update_values = schedule.model_dump(exclude_none=True)
+
+    if update_values.get("dominant"):
+        update_values["active"] = True
+
     if deployment_schedule_id:
         result = await session.execute(
             sa.update(db.DeploymentSchedule)
@@ -1014,7 +1033,7 @@ async def update_deployment_schedule(
                     db.DeploymentSchedule.deployment_id == deployment_id,
                 )
             )
-            .values(**schedule.model_dump(exclude_none=True))
+            .values(**update_values)
         )
     elif deployment_schedule_slug:
         result = await session.execute(
@@ -1025,12 +1044,36 @@ async def update_deployment_schedule(
                     db.DeploymentSchedule.deployment_id == deployment_id,
                 )
             )
-            .values(**schedule.model_dump(exclude_none=True))
+            .values(**update_values)
         )
     else:
         raise ValueError(
             "Either deployment_schedule_id or deployment_schedule_slug must be provided"
         )
+
+    if result.rowcount > 0 and update_values.get("dominant"):
+        if deployment_schedule_id:
+            await session.execute(
+                sa.update(db.DeploymentSchedule)
+                .where(
+                    sa.and_(
+                        db.DeploymentSchedule.deployment_id == deployment_id,
+                        db.DeploymentSchedule.id != deployment_schedule_id,
+                    )
+                )
+                .values(active=False, dominant=False)
+            )
+        elif deployment_schedule_slug:
+            await session.execute(
+                sa.update(db.DeploymentSchedule)
+                .where(
+                    sa.and_(
+                        db.DeploymentSchedule.deployment_id == deployment_id,
+                        db.DeploymentSchedule.slug != deployment_schedule_slug,
+                    )
+                )
+                .values(active=False, dominant=False)
+            )
 
     return result.rowcount > 0
 
