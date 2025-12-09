@@ -783,6 +783,7 @@ class DeploymentSchedule(Base):
         Pydantic(schemas.schedules.SCHEDULE_TYPES)
     )
     active: Mapped[bool] = mapped_column(default=True)
+    dominant: Mapped[bool] = mapped_column(default=False)
     max_scheduled_runs: Mapped[Optional[int]]
     parameters: Mapped[dict[str, Any]] = mapped_column(
         JSON, server_default="{}", default=dict, nullable=False
