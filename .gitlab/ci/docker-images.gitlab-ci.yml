@@ -1,0 +1,325 @@
+# Converted from .github/workflows/docker-images.yaml
+#
+# Original triggers:
+#   - release (released / prereleased)  -> GitLab: tag pipelines
+#   - workflow_dispatch with publish_3_latest input -> GitLab: web trigger with variable
+#
+# Required CI/CD variables (masked):
+#   - DOCKERHUB_USERNAME
+#   - DOCKERHUB_TOKEN
+#   - OPS_CLUSTER_DEPLOYMENT_ACTIONS_RW
+
+# ---------------------------------------------------------------------------
+# Publish Docker images to DockerHub
+# ---------------------------------------------------------------------------
+
+# Helper template for docker-in-docker jobs
+.docker-publish-base:
+  stage: docker-publish
+  image: docker:24-cli
+  services:
+    - docker:24-dind
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+  interruptible: false
+  before_script:
+    # Install dependencies for scripting
+    - apk add --no-cache bash curl jq git python3
+    # Set up QEMU for multi-arch builds
+    - docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+    # Set up Docker Buildx
+    - docker buildx create --use --driver docker-container --driver-opt image=moby/buildkit:v0.12.5
+    # Login to DockerHub
+    - docker login -u "$DOCKERHUB_USERNAME" -p "$DOCKERHUB_TOKEN"
+
+# -- Prerelease validation ---------------------------------------------------
+.validate-prerelease-tag:
+  script:
+    - |
+      TAG_NAME="$CI_COMMIT_TAG"
+      if [[ ! "$TAG_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+([a-zA-Z0-9]+|\.dev[0-9]+)$ ]]; then
+        echo "Error: Tag $TAG_NAME does not match prerelease version pattern."
+        exit 1
+      fi
+
+# ===========================================================================
+# publish-docker-images
+#
+# The GitHub Actions workflow used a matrix of image x python-version x flavor
+# with excludes. We replicate this using parallel:matrix with two separate
+# job definitions (one for prefecthq/prefect with all flavors, one for
+# prefecthq/prefect-client with only the default flavor).
+# ===========================================================================
+
+# --- prefecthq/prefect (all flavors) ----------------------------------------
+publish-prefect-images:
+  extends: .docker-publish-base
+  rules:
+    # Run on tag pipelines (release equivalent)
+    - if: $CI_COMMIT_TAG
+    # Run on manual trigger when PUBLISH_3_LATEST is set
+    - if: $CI_PIPELINE_SOURCE == "web" && $PUBLISH_3_LATEST == "true"
+  parallel:
+    matrix:
+      - PYTHON_VERSION: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        FLAVOR: ["", "-conda", "-kubernetes"]
+  script:
+    - |
+      set -euo pipefail
+
+      NODE_VERSION=$(cat .nvmrc)
+
+      # ---- Determine latest release tag via GitLab API ----
+      LATEST_TAG=$(curl -qsSL \
+        --header "PRIVATE-TOKEN: ${CI_JOB_TOKEN}" \
+        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/releases" \
+      | jq -r '.[0].tag_name // empty')
+
+      # ---- Check if this is a prerelease tag ----
+      IS_PRERELEASE="false"
+      if [[ "$CI_COMMIT_TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+([a-zA-Z0-9]+|\.dev[0-9]+)$ ]] && \
+         [[ ! "$CI_COMMIT_TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        IS_PRERELEASE="true"
+      fi
+      IS_RELEASE="false"
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        IS_RELEASE="true"
+      fi
+      IS_MANUAL="false"
+      if [ "$CI_PIPELINE_SOURCE" = "web" ]; then
+        IS_MANUAL="true"
+      fi
+
+      # ---- Build tag list ----
+      TAGS=""
+
+      # Dev image tags (only on prerelease)
+      if [ "$IS_PRERELEASE" = "true" ]; then
+        TAGS="${TAGS} --tag prefecthq/prefect-dev:${CI_COMMIT_TAG}-python${PYTHON_VERSION}${FLAVOR}"
+        SHORT_SHA=$(echo "$CI_COMMIT_SHA" | cut -c1-7)
+        TAGS="${TAGS} --tag prefecthq/prefect-dev:sha-${SHORT_SHA}-python${PYTHON_VERSION}${FLAVOR}"
+      fi
+
+      # Production image tags
+      if [ "$IS_RELEASE" = "true" ]; then
+        # Full version tag
+        TAGS="${TAGS} --tag prefecthq/prefect:${CI_COMMIT_TAG}-python${PYTHON_VERSION}${FLAVOR}"
+      fi
+      if [ "$IS_RELEASE" = "true" ] && [ "$IS_PRERELEASE" = "false" ]; then
+        # Major.Minor tag
+        MAJOR=$(echo "$CI_COMMIT_TAG" | cut -d. -f1)
+        MINOR=$(echo "$CI_COMMIT_TAG" | cut -d. -f2)
+        TAGS="${TAGS} --tag prefecthq/prefect:${MAJOR}.${MINOR}-python${PYTHON_VERSION}${FLAVOR}"
+        # Major tag (only if this is the latest release)
+        if [ "$CI_COMMIT_TAG" = "$LATEST_TAG" ]; then
+          TAGS="${TAGS} --tag prefecthq/prefect:${MAJOR}-python${PYTHON_VERSION}${FLAVOR}"
+        fi
+        # 3-latest tag (only for python 3.12 on latest release)
+        if [ "$CI_COMMIT_TAG" = "$LATEST_TAG" ] && [ "$PYTHON_VERSION" = "3.12" ]; then
+          TAGS="${TAGS} --tag prefecthq/prefect:3-latest${FLAVOR}"
+        fi
+      fi
+      # 3-latest tags on manual trigger
+      if [ "$IS_MANUAL" = "true" ] && [ "${PUBLISH_3_LATEST:-}" = "true" ]; then
+        TAGS="${TAGS} --tag prefecthq/prefect:3-latest${FLAVOR}"
+        TAGS="${TAGS} --tag prefecthq/prefect:3-latest-python${PYTHON_VERSION}${FLAVOR}"
+      fi
+
+      # ---- Determine build args ----
+      BUILD_ARGS="--build-arg PYTHON_VERSION=${PYTHON_VERSION} --build-arg NODE_VERSION=${NODE_VERSION}"
+      if [[ "$FLAVOR" == *"conda"* ]]; then
+        BUILD_ARGS="${BUILD_ARGS} --build-arg BASE_IMAGE=prefect-conda"
+      fi
+      if [[ "$FLAVOR" == *"kubernetes"* ]]; then
+        BUILD_ARGS="${BUILD_ARGS} --build-arg PREFECT_EXTRAS=[redis,kubernetes]"
+      fi
+
+      # ---- Build and push ----
+      docker buildx build \
+        --platform linux/amd64,linux/arm64 \
+        ${BUILD_ARGS} \
+        ${TAGS} \
+        --push \
+        --pull \
+        --provenance=false \
+        .
+
+# --- prefecthq/prefect-client (default flavor only) -------------------------
+publish-prefect-client-images:
+  extends: .docker-publish-base
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_PIPELINE_SOURCE == "web" && $PUBLISH_3_LATEST == "true"
+  parallel:
+    matrix:
+      - PYTHON_VERSION: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+  script:
+    - |
+      set -euo pipefail
+
+      NODE_VERSION=$(cat .nvmrc)
+
+      LATEST_TAG=$(curl -qsSL \
+        --header "PRIVATE-TOKEN: ${CI_JOB_TOKEN}" \
+        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/releases" \
+      | jq -r '.[0].tag_name // empty')
+
+      IS_PRERELEASE="false"
+      if [[ "$CI_COMMIT_TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+([a-zA-Z0-9]+|\.dev[0-9]+)$ ]] && \
+         [[ ! "$CI_COMMIT_TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        IS_PRERELEASE="true"
+      fi
+      IS_RELEASE="false"
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        IS_RELEASE="true"
+      fi
+      IS_MANUAL="false"
+      if [ "$CI_PIPELINE_SOURCE" = "web" ]; then
+        IS_MANUAL="true"
+      fi
+
+      TAGS=""
+
+      if [ "$IS_PRERELEASE" = "true" ]; then
+        TAGS="${TAGS} --tag prefecthq/prefect-client-dev:${CI_COMMIT_TAG}-python${PYTHON_VERSION}"
+        SHORT_SHA=$(echo "$CI_COMMIT_SHA" | cut -c1-7)
+        TAGS="${TAGS} --tag prefecthq/prefect-client-dev:sha-${SHORT_SHA}-python${PYTHON_VERSION}"
+      fi
+
+      if [ "$IS_RELEASE" = "true" ]; then
+        TAGS="${TAGS} --tag prefecthq/prefect-client:${CI_COMMIT_TAG}-python${PYTHON_VERSION}"
+      fi
+      if [ "$IS_RELEASE" = "true" ] && [ "$IS_PRERELEASE" = "false" ]; then
+        MAJOR=$(echo "$CI_COMMIT_TAG" | cut -d. -f1)
+        MINOR=$(echo "$CI_COMMIT_TAG" | cut -d. -f2)
+        TAGS="${TAGS} --tag prefecthq/prefect-client:${MAJOR}.${MINOR}-python${PYTHON_VERSION}"
+        if [ "$CI_COMMIT_TAG" = "$LATEST_TAG" ]; then
+          TAGS="${TAGS} --tag prefecthq/prefect-client:${MAJOR}-python${PYTHON_VERSION}"
+        fi
+        if [ "$CI_COMMIT_TAG" = "$LATEST_TAG" ] && [ "$PYTHON_VERSION" = "3.12" ]; then
+          TAGS="${TAGS} --tag prefecthq/prefect-client:3-latest"
+        fi
+      fi
+      if [ "$IS_MANUAL" = "true" ] && [ "${PUBLISH_3_LATEST:-}" = "true" ]; then
+        TAGS="${TAGS} --tag prefecthq/prefect-client:3-latest"
+        TAGS="${TAGS} --tag prefecthq/prefect-client:3-latest-python${PYTHON_VERSION}"
+      fi
+
+      docker buildx build \
+        --platform linux/amd64,linux/arm64 \
+        --build-arg PYTHON_VERSION=${PYTHON_VERSION} \
+        --build-arg NODE_VERSION=${NODE_VERSION} \
+        --file client/Dockerfile \
+        ${TAGS} \
+        --push \
+        --pull \
+        --provenance=false \
+        .
+
+# ===========================================================================
+# Get prefect-aws version and trigger downstream build
+# ===========================================================================
+get-prefect-aws-version:
+  stage: downstream
+  image: alpine:latest
+  rules:
+    - if: $CI_COMMIT_TAG
+  needs:
+    - publish-prefect-images
+    - publish-prefect-client-images
+  before_script:
+    - apk add --no-cache git
+  script:
+    - |
+      PREFECT_AWS_VERSION=$(git tag --list 'prefect-aws-*' --sort=-version:refname | head -1 | sed 's/^prefect-aws-//')
+      echo "PREFECT_AWS_VERSION=${PREFECT_AWS_VERSION}" > prefect_aws.env
+  artifacts:
+    reports:
+      dotenv: prefect_aws.env
+
+# ---------------------------------------------------------------------------
+# Trigger prefect-aws Docker image build
+# ---------------------------------------------------------------------------
+trigger-prefect-aws-build:
+  stage: downstream
+  image: docker:24-cli
+  services:
+    - docker:24-dind
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+  rules:
+    - if: $CI_COMMIT_TAG
+  needs:
+    - job: get-prefect-aws-version
+      artifacts: true
+    - publish-prefect-images
+    - publish-prefect-client-images
+  before_script:
+    - apk add --no-cache bash curl jq git python3
+    - docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+    - docker buildx create --use --driver docker-container --driver-opt image=moby/buildkit:v0.12.5
+    - docker login -u "$DOCKERHUB_USERNAME" -p "$DOCKERHUB_TOKEN"
+  script:
+    - |
+      set -euo pipefail
+
+      if [ -z "${PREFECT_AWS_VERSION:-}" ]; then
+        echo "No prefect-aws version found; skipping."
+        exit 0
+      fi
+
+      PREFECT_VERSION="$CI_COMMIT_TAG"
+
+      for PYTHON_VERSION in 3.9 3.10 3.11 3.12 3.13; do
+        TAGS=""
+        TAGS="${TAGS} --tag prefecthq/prefect-aws:${PREFECT_AWS_VERSION}-python${PYTHON_VERSION}-prefect${PREFECT_VERSION}"
+        TAGS="${TAGS} --tag prefecthq/prefect-aws:${PREFECT_AWS_VERSION}-python${PYTHON_VERSION}"
+
+        # Minor version tag (only for stable releases)
+        if [[ ! "$PREFECT_AWS_VERSION" =~ rc ]]; then
+          MAJOR=$(echo "$PREFECT_AWS_VERSION" | cut -d. -f1)
+          MINOR=$(echo "$PREFECT_AWS_VERSION" | cut -d. -f2)
+          TAGS="${TAGS} --tag prefecthq/prefect-aws:${MAJOR}.${MINOR}-python${PYTHON_VERSION}"
+          TAGS="${TAGS} --tag prefecthq/prefect-aws:latest-python${PYTHON_VERSION}"
+          if [ "$PYTHON_VERSION" = "3.12" ]; then
+            TAGS="${TAGS} --tag prefecthq/prefect-aws:latest"
+          fi
+        fi
+
+        docker buildx build \
+          --platform linux/amd64,linux/arm64 \
+          --build-arg PYTHON_VERSION=${PYTHON_VERSION} \
+          --build-arg PREFECT_VERSION=${PREFECT_VERSION} \
+          --build-arg PREFECT_AWS_VERSION=${PREFECT_AWS_VERSION} \
+          ${TAGS} \
+          --push \
+          --pull \
+          --provenance=false \
+          src/integrations/prefect-aws
+      done
+
+# ---------------------------------------------------------------------------
+# Trigger OSS testbed image update
+# ---------------------------------------------------------------------------
+trigger-oss-testbed-update:
+  stage: downstream
+  image: alpine:latest
+  rules:
+    - if: $CI_COMMIT_TAG
+  needs:
+    - publish-prefect-images
+    - publish-prefect-client-images
+  before_script:
+    - apk add --no-cache curl
+  script:
+    - |
+      IMAGE_TAG="${CI_COMMIT_TAG}-python3.11-kubernetes"
+      echo "Triggering ops-cluster-deployment with image tag: ${IMAGE_TAG}"
+      # NOTE: This step originally used the GitHub CLI to trigger a workflow
+      # in PrefectHQ/ops-cluster-deployment. In GitLab, this would be done via
+      # a downstream pipeline trigger or an API call to the target project.
+      # Adjust the URL and token as needed for your GitLab setup.
+      echo "WARNING: Cross-repository trigger not yet configured for GitLab."
+      echo "Original: gh workflow run update-prefect-image-version.yaml --repo PrefectHQ/ops-cluster-deployment --ref main --field image_tag=${IMAGE_TAG}"
