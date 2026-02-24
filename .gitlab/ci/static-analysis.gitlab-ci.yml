@@ -1,0 +1,59 @@
+# Converted from .github/workflows/static-analysis.yaml
+#
+# Original triggers: push to main, all pull requests
+# Original concurrency: group by workflow + branch, cancel-in-progress on PRs
+
+# ---------------------------------------------------------------------------
+# Pre-commit checks
+# ---------------------------------------------------------------------------
+pre-commit-checks:
+  stage: static-analysis
+  image: python:3.9
+  interruptible: true
+  resource_group: static-analysis-$CI_COMMIT_REF_SLUG
+  variables:
+    PY_COLORS: "1"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+  before_script:
+    - pip install uv
+    - NODE_VERSION=$(cat .nvmrc)
+    - curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION%%.*}.x | bash -
+    - apt-get install -y nodejs
+    - npm install -g @mintlify/scraping
+  script:
+    - uv sync --compile-bytecode --no-editable --locked
+    # Skip no-commit-to-branch check when running on main after merge
+    - |
+      if [ "$CI_COMMIT_BRANCH" = "main" ]; then
+        export SKIP="no-commit-to-branch"
+      fi
+    - uv run pre-commit run --show-diff-on-failure --color=always --all-files
+  cache:
+    key: pre-commit-py39-${CI_COMMIT_REF_SLUG}
+    paths:
+      - .cache/uv
+      - .cache/pre-commit
+
+# ---------------------------------------------------------------------------
+# Type checks
+# ---------------------------------------------------------------------------
+type-checks:
+  stage: static-analysis
+  image: python:3.12
+  interruptible: true
+  resource_group: type-checks-$CI_COMMIT_REF_SLUG
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+  before_script:
+    - pip install uv
+  script:
+    - uv sync --compile-bytecode --no-editable --group type-checking --no-dev --locked
+    - uv run pyright --ignoreexternal --verifytypes prefect
+    - uv run pyright -p pyrightconfig-ci.json
+  cache:
+    key: type-checks-py312-${CI_COMMIT_REF_SLUG}
+    paths:
+      - .cache/uv

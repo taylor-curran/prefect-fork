@@ -1,0 +1,362 @@
+# Converted from .github/workflows/python-tests.yaml
+#
+# Original triggers: pull_request + push to main with path filters
+# Original concurrency: group by workflow + branch, cancel-in-progress on PRs
+# Original matrix: test-type x database x python-version with excludes
+#
+# GitLab's parallel:matrix does not support `exclude`, so the matrix is split
+# into separate job definitions:
+#   - Server / DB+Orch tests: run on both postgres and sqlite for all Python versions
+#   - Client tests: run only on postgres (excluded from sqlite in GH Actions)
+#   - Runner/Worker/Settings/Input/CLI tests: run only on postgres (excluded from sqlite)
+
+# ---------------------------------------------------------------------------
+# Common configuration anchors
+# ---------------------------------------------------------------------------
+.python-test-rules:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - .gitlab/ci/python-tests.gitlab-ci.yml
+        - "src/prefect/**/*.py"
+        - "tests/**/*.py"
+        - pyproject.toml
+        - Dockerfile
+        - scripts/entrypoint.sh
+    - if: $CI_COMMIT_BRANCH == "main"
+      changes:
+        - .gitlab/ci/python-tests.gitlab-ci.yml
+        - "src/prefect/**/*.py"
+        - "tests/**/*.py"
+        - pyproject.toml
+        - Dockerfile
+        - scripts/entrypoint.sh
+
+.python-test-base:
+  stage: test
+  interruptible: true
+  resource_group: unit-tests-$CI_COMMIT_REF_SLUG
+  timeout: 15 minutes
+  variables:
+    PY_COLORS: "1"
+  before_script:
+    - pip install uv
+    - uv sync --locked
+    # Start redis
+    - docker run --name redis --detach --publish 6379:6379 redis:latest || true
+  cache:
+    key: python-tests-${PYTHON_VERSION}-${CI_COMMIT_REF_SLUG}
+    paths:
+      - .cache/uv
+
+# ---------------------------------------------------------------------------
+# Helper: Postgres setup script (used in before_script)
+# ---------------------------------------------------------------------------
+.postgres-setup: &postgres-setup
+  - |
+    docker run \
+      --name "postgres" \
+      --detach \
+      --health-cmd pg_isready \
+      --health-interval 10s \
+      --health-timeout 5s \
+      --health-retries 5 \
+      --publish 5432:5432 \
+      --tmpfs /var/lib/postgresql/data \
+      --env POSTGRES_USER="prefect" \
+      --env POSTGRES_PASSWORD="prefect" \
+      --env POSTGRES_DB="prefect" \
+      --env LANG="C.UTF-8" \
+      --env LANGUAGE="C.UTF-8" \
+      --env LC_ALL="C.UTF-8" \
+      --env LC_COLLATE="C.UTF-8" \
+      --env LC_CTYPE="C.UTF-8" \
+      ${DATABASE_IMAGE} \
+      -c max_connections=250
+  - ./scripts/wait-for-healthy-container.sh postgres 30
+  - export PREFECT_SERVER_DATABASE_CONNECTION_URL="postgresql+asyncpg://prefect:prefect@localhost/prefect"
+
+# ===========================================================================
+# Server Tests — postgres & sqlite x all Python versions
+# ===========================================================================
+server-tests:
+  extends: .python-test-base
+  rules: !reference [.python-test-rules, rules]
+  image: python:${PYTHON_VERSION}
+  services:
+    - docker:dind
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+  parallel:
+    matrix:
+      - PYTHON_VERSION: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        DATABASE_IMAGE: ["postgres:14"]
+      - PYTHON_VERSION: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        DATABASE_IMAGE: ["sqlite"]
+  before_script:
+    - pip install uv
+    - uv sync --locked
+    - docker run --name redis --detach --publish 6379:6379 redis:latest || true
+    - |
+      if [ "$DATABASE_IMAGE" != "sqlite" ]; then
+        docker run \
+          --name "postgres" \
+          --detach \
+          --health-cmd pg_isready \
+          --health-interval 10s \
+          --health-timeout 5s \
+          --health-retries 5 \
+          --publish 5432:5432 \
+          --tmpfs /var/lib/postgresql/data \
+          --env POSTGRES_USER="prefect" \
+          --env POSTGRES_PASSWORD="prefect" \
+          --env POSTGRES_DB="prefect" \
+          --env LANG="C.UTF-8" \
+          --env LANGUAGE="C.UTF-8" \
+          --env LC_ALL="C.UTF-8" \
+          --env LC_COLLATE="C.UTF-8" \
+          --env LC_CTYPE="C.UTF-8" \
+          ${DATABASE_IMAGE} \
+          -c max_connections=250
+        ./scripts/wait-for-healthy-container.sh postgres 30
+        export PREFECT_SERVER_DATABASE_CONNECTION_URL="postgresql+asyncpg://prefect:prefect@localhost/prefect"
+      fi
+  script:
+    - |
+      uv run pytest tests/server/ tests/events/server \
+        --ignore=tests/server/database/ \
+        --ignore=tests/server/orchestration/ \
+        --numprocesses auto \
+        --maxprocesses 6 \
+        --dist worksteal \
+        --disable-docker-image-builds \
+        --exclude-service kubernetes \
+        --exclude-service docker \
+        --durations 26
+  after_script:
+    - docker container inspect postgres && docker container logs postgres || echo "Ignoring bad exit code"
+
+# ===========================================================================
+# Database and Orchestration Tests — postgres & sqlite x all Python versions
+# ===========================================================================
+db-orchestration-tests:
+  extends: .python-test-base
+  rules: !reference [.python-test-rules, rules]
+  image: python:${PYTHON_VERSION}
+  services:
+    - docker:dind
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+  parallel:
+    matrix:
+      - PYTHON_VERSION: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        DATABASE_IMAGE: ["postgres:14"]
+      - PYTHON_VERSION: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        DATABASE_IMAGE: ["sqlite"]
+  before_script:
+    - pip install uv
+    - uv sync --locked
+    - docker run --name redis --detach --publish 6379:6379 redis:latest || true
+    - |
+      if [ "$DATABASE_IMAGE" != "sqlite" ]; then
+        docker run \
+          --name "postgres" \
+          --detach \
+          --health-cmd pg_isready \
+          --health-interval 10s \
+          --health-timeout 5s \
+          --health-retries 5 \
+          --publish 5432:5432 \
+          --tmpfs /var/lib/postgresql/data \
+          --env POSTGRES_USER="prefect" \
+          --env POSTGRES_PASSWORD="prefect" \
+          --env POSTGRES_DB="prefect" \
+          --env LANG="C.UTF-8" \
+          --env LANGUAGE="C.UTF-8" \
+          --env LC_ALL="C.UTF-8" \
+          --env LC_COLLATE="C.UTF-8" \
+          --env LC_CTYPE="C.UTF-8" \
+          ${DATABASE_IMAGE} \
+          -c max_connections=250
+        ./scripts/wait-for-healthy-container.sh postgres 30
+        export PREFECT_SERVER_DATABASE_CONNECTION_URL="postgresql+asyncpg://prefect:prefect@localhost/prefect"
+      fi
+  script:
+    - |
+      uv run pytest tests/server/database/ tests/server/orchestration/ \
+        --numprocesses auto \
+        --maxprocesses 6 \
+        --dist worksteal \
+        --disable-docker-image-builds \
+        --exclude-service kubernetes \
+        --exclude-service docker \
+        --durations 26
+  after_script:
+    - docker container inspect postgres && docker container logs postgres || echo "Ignoring bad exit code"
+
+# ===========================================================================
+# Client Tests — postgres only (excluded from sqlite in original workflow)
+# ===========================================================================
+client-tests:
+  extends: .python-test-base
+  rules: !reference [.python-test-rules, rules]
+  image: python:${PYTHON_VERSION}
+  services:
+    - docker:dind
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+  parallel:
+    matrix:
+      - PYTHON_VERSION: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        DATABASE_IMAGE: ["postgres:14"]
+  before_script:
+    - pip install uv
+    - uv sync --locked
+    - docker run --name redis --detach --publish 6379:6379 redis:latest || true
+    - *postgres-setup
+  script:
+    - |
+      uv run pytest tests/ \
+        --ignore=tests/typesafety \
+        --ignore=tests/server/ \
+        --ignore=tests/events/server \
+        --ignore=tests/test_task_runners.py \
+        --ignore=tests/runner \
+        --ignore=tests/workers \
+        --ignore=tests/cli/ \
+        --ignore=tests/test_settings.py \
+        --ignore=tests/input/ \
+        --numprocesses auto \
+        --maxprocesses 6 \
+        --dist worksteal \
+        --disable-docker-image-builds \
+        --exclude-service kubernetes \
+        --exclude-service docker \
+        --durations 26
+  after_script:
+    - docker container inspect postgres && docker container logs postgres || echo "Ignoring bad exit code"
+
+# ===========================================================================
+# Runner, Worker, Settings, Input, and CLI Tests — postgres only
+# ===========================================================================
+runner-worker-cli-tests:
+  extends: .python-test-base
+  rules: !reference [.python-test-rules, rules]
+  image: python:${PYTHON_VERSION}
+  services:
+    - docker:dind
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+  parallel:
+    matrix:
+      - PYTHON_VERSION: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        DATABASE_IMAGE: ["postgres:14"]
+  before_script:
+    - pip install uv
+    - uv sync --locked
+    - docker run --name redis --detach --publish 6379:6379 redis:latest || true
+    - *postgres-setup
+  script:
+    - |
+      uv run pytest tests/test_task_runners.py tests/runner tests/workers tests/cli/ tests/test_settings.py tests/input/ \
+        --numprocesses auto \
+        --maxprocesses 6 \
+        --dist worksteal \
+        --disable-docker-image-builds \
+        --exclude-service kubernetes \
+        --exclude-service docker \
+        --durations 26
+  after_script:
+    - docker container inspect postgres && docker container logs postgres || echo "Ignoring bad exit code"
+
+# ===========================================================================
+# Docker Tests — postgres x Python versions (separate job from unit tests)
+# ===========================================================================
+docker-tests:
+  stage: test
+  image: python:${PYTHON_VERSION}
+  interruptible: true
+  resource_group: docker-tests-$CI_COMMIT_REF_SLUG
+  timeout: 45 minutes
+  services:
+    - docker:dind
+  variables:
+    PY_COLORS: "1"
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+  rules: !reference [.python-test-rules, rules]
+  parallel:
+    matrix:
+      - PYTHON_VERSION: ["3.9", "3.10", "3.11", "3.12"]
+        DATABASE_IMAGE: ["postgres:14"]
+  before_script:
+    - pip install uv
+    # Set up Docker Buildx
+    - docker buildx create --use --driver docker-container --driver-opt image=moby/buildkit:v0.12.5 || true
+    # Get image tag
+    - SHORT_SHA=$(git rev-parse --short=7 HEAD)
+    - IMAGE_TAG="sha-${SHORT_SHA}-python${PYTHON_VERSION}"
+    - NODE_VERSION=$(cat .nvmrc)
+    # Login to DockerHub (only for internal MRs)
+    - |
+      if [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ]; then
+        docker login -u "$DOCKERHUB_USERNAME" -p "$DOCKERHUB_TOKEN"
+      fi
+    # Build test Docker image
+    - |
+      docker buildx build \
+        --build-arg PYTHON_VERSION=${PYTHON_VERSION} \
+        --build-arg "PREFECT_EXTRAS=[dev]" \
+        --build-arg NODE_VERSION=${NODE_VERSION} \
+        --tag prefecthq/prefect-dev:${IMAGE_TAG} \
+        --output type=docker,dest=/tmp/image.tar \
+        .
+    - docker load --input /tmp/image.tar
+    - docker run --rm prefecthq/prefect-dev:${IMAGE_TAG} prefect version
+    # Install packages and start services
+    - uv sync --locked
+    - *postgres-setup
+    # Start docker registry
+    - docker run --name "prefect-test-registry" --detach --publish 5555:5000 registry:2
+    # Start redis
+    - docker run --name redis --detach --publish 6379:6379 redis:latest || true
+  script:
+    - git diff --exit-code
+    - |
+      uv run pytest tests --ignore=tests/typesafety \
+        --numprocesses auto \
+        --maxprocesses 6 \
+        --dist worksteal \
+        --disable-docker-image-builds \
+        --only-service docker \
+        --durations 26
+  after_script:
+    - docker container inspect postgres && docker container logs postgres || echo "Ignoring bad exit code"
+  cache:
+    key: docker-tests-${PYTHON_VERSION}-${CI_COMMIT_REF_SLUG}
+    paths:
+      - .cache/uv
+
+# ===========================================================================
+# Typesafety Tests
+# ===========================================================================
+typesafety-tests:
+  stage: test
+  image: python:3.12
+  interruptible: true
+  rules: !reference [.python-test-rules, rules]
+  variables:
+    PY_COLORS: "1"
+  before_script:
+    - pip install uv
+  script:
+    - uv sync --locked
+    - uv run pytest tests/typesafety --disable-docker-image-builds
+  cache:
+    key: typesafety-py312-${CI_COMMIT_REF_SLUG}
+    paths:
+      - .cache/uv

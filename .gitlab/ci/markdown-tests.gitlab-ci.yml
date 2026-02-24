@@ -1,0 +1,50 @@
+# Converted from .github/workflows/markdown-tests.yaml
+#
+# Original triggers: workflow_dispatch, pull_request (path-filtered), push to main (path-filtered)
+# Original concurrency: group by workflow + branch, cancel-in-progress on PRs
+
+markdown-tests:
+  stage: test
+  image: python:3.10
+  interruptible: true
+  resource_group: markdown-tests-$CI_COMMIT_REF_SLUG
+  timeout: 10 minutes
+  variables:
+    PY_COLORS: "1"
+    UV_SYSTEM_PYTHON: "1"
+  rules:
+    # Manual trigger (workflow_dispatch equivalent)
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: manual
+      allow_failure: true
+    # Merge request with path filters
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - .gitlab/ci/markdown-tests.gitlab-ci.yml
+        - "docs/**"
+        - pyproject.toml
+        - Dockerfile
+    # Push to main with path filters
+    - if: $CI_COMMIT_BRANCH == "main"
+      changes:
+        - .gitlab/ci/markdown-tests.gitlab-ci.yml
+        - "src/prefect/**/*.py"
+        - "tests/**/*.py"
+        - pyproject.toml
+        - Dockerfile
+  before_script:
+    - pip install uv
+  script:
+    - uv sync --group markdown-docs --locked
+    # Start the Prefect server in the background
+    - PREFECT_HOME=$(pwd) uv run prefect server start &
+    - PREFECT_API_URL="http://127.0.0.1:4200/api" uv run ./scripts/wait-for-server.py
+    # Run markdown doc tests
+    - >
+      PREFECT_API_URL="http://127.0.0.1:4200/api" uv run pytest docs/ --markdown-docs -m markdown-docs
+      --numprocesses auto
+      --maxprocesses 6
+  cache:
+    key: markdown-tests-py310-${CI_COMMIT_REF_SLUG}
+    paths:
+      - .cache/uv
