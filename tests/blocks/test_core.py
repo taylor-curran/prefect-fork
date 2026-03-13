@@ -1794,6 +1794,114 @@ class TestSaveBlock:
         loaded_anonymous_outer_block = await OuterBlock.load("the-outer-block")
         assert loaded_anonymous_outer_block == named_outer_block
 
+    async def test_save_anonymous_block_nested_in_anonymous_block(
+        self, InnerBlock, OuterBlock
+    ):
+        anonymous_inner_block = InnerBlock(size=1)
+        await anonymous_inner_block._save(is_anonymous=True)
+
+        assert anonymous_inner_block._block_document_name is not None
+        assert anonymous_inner_block._is_anonymous
+
+        anonymous_outer_block = OuterBlock(size=10, contents=anonymous_inner_block)
+        await anonymous_outer_block._save(is_anonymous=True)
+
+        assert anonymous_outer_block._block_document_name is not None
+        assert anonymous_outer_block._is_anonymous
+
+        loaded_outer_block = await OuterBlock.load(
+            anonymous_outer_block._block_document_name
+        )
+        assert loaded_outer_block == anonymous_outer_block
+        assert loaded_outer_block._is_anonymous
+        assert loaded_outer_block.contents == anonymous_inner_block
+
+    async def test_save_multiple_anonymous_blocks_nested_in_named_block(
+        self, InnerBlock, OuterBlock
+    ):
+        # Create an anonymous inner block and nest it in an anonymous outer block
+        anonymous_inner_block = InnerBlock(size=1)
+        await anonymous_inner_block._save(is_anonymous=True)
+
+        anonymous_outer_block = OuterBlock(size=5, contents=anonymous_inner_block)
+        await anonymous_outer_block._save(is_anonymous=True)
+
+        # Define a block type with two nested block fields
+        class DoubleNestedBlock(Block):
+            size: int
+            first: OuterBlock
+            second: InnerBlock
+
+        # Create a named block containing multiple anonymous blocks
+        named_block = DoubleNestedBlock(
+            size=100,
+            first=anonymous_outer_block,
+            second=anonymous_inner_block,
+        )
+        await named_block.save("double-nested-block")
+
+        loaded_block = await DoubleNestedBlock.load("double-nested-block")
+        assert loaded_block == named_block
+        assert loaded_block.first == anonymous_outer_block
+        assert loaded_block.second == anonymous_inner_block
+
+    async def test_save_anonymous_nested_block_preserves_values(
+        self, InnerBlock, OuterBlock
+    ):
+        anonymous_inner_block = InnerBlock(size=42)
+        await anonymous_inner_block._save(is_anonymous=True)
+
+        assert anonymous_inner_block._is_anonymous
+
+        named_outer_block = OuterBlock(size=100, contents=anonymous_inner_block)
+        await named_outer_block.save("outer-with-values")
+
+        loaded_outer_block = await OuterBlock.load("outer-with-values")
+        assert loaded_outer_block == named_outer_block
+        assert loaded_outer_block.size == 100
+        assert loaded_outer_block.contents.size == 42
+        assert isinstance(loaded_outer_block.contents, InnerBlock)
+
+    async def test_save_anonymous_nested_block_is_not_visible_in_default_queries(
+        self, InnerBlock, OuterBlock, prefect_client: PrefectClient
+    ):
+        anonymous_inner_block = InnerBlock(size=1)
+        await anonymous_inner_block._save(is_anonymous=True)
+
+        named_outer_block = OuterBlock(size=10, contents=anonymous_inner_block)
+        await named_outer_block.save("visible-outer-block")
+
+        # Default read_block_documents excludes anonymous blocks
+        block_documents = await prefect_client.read_block_documents()
+        block_document_names = [doc.name for doc in block_documents]
+
+        assert "visible-outer-block" in block_document_names
+        assert anonymous_inner_block._block_document_name not in block_document_names
+
+    async def test_load_named_block_with_anonymous_nested_block_round_trip(
+        self, InnerBlock, OuterBlock
+    ):
+        anonymous_inner_block = InnerBlock(size=7)
+        await anonymous_inner_block._save(is_anonymous=True)
+
+        named_outer_block = OuterBlock(size=20, contents=anonymous_inner_block)
+        await named_outer_block.save("round-trip-block")
+
+        # First load
+        loaded_outer_block = await OuterBlock.load("round-trip-block")
+        assert loaded_outer_block == named_outer_block
+
+        # Re-save (overwrite)
+        loaded_outer_block.size = 30
+        await loaded_outer_block.save("round-trip-block", overwrite=True)
+
+        # Second load
+        reloaded_outer_block = await OuterBlock.load("round-trip-block")
+        assert reloaded_outer_block == loaded_outer_block
+        assert reloaded_outer_block.size == 30
+        assert reloaded_outer_block.contents.size == 7
+        assert reloaded_outer_block.contents == anonymous_inner_block
+
     async def test_save_nested_block_without_references(self, InnerBlock, OuterBlock):
         new_inner_block = InnerBlock(size=1)
         new_outer_block = OuterBlock(size=10, contents=new_inner_block)
