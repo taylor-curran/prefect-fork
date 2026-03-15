@@ -37,6 +37,7 @@ from prefect.client.schemas import FlowRun, TaskRun
 from prefect.client.schemas.objects import RunType
 from prefect.events.worker import EventsWorker
 from prefect.exceptions import MissingContextError
+from prefect.logging.loggers import get_logger
 from prefect.results import (
     ResultStore,
     get_default_persist_setting,
@@ -50,6 +51,8 @@ from prefect.states import State
 from prefect.task_runners import TaskRunner
 from prefect.types import DateTime
 from prefect.utilities.services import start_client_metrics_server
+
+logger = get_logger(__name__)
 
 T = TypeVar("T")
 P = TypeVar("P")
@@ -110,9 +113,13 @@ def hydrated_context(
 
     with ExitStack() as stack:
         if serialized_context:
+            logger.debug("Hydrating context from serialized data")
+            found_components: list[str] = []
+
             # Set up settings context
             if settings_context := serialized_context.get("settings_context"):
                 stack.enter_context(SettingsContext(**settings_context))
+                found_components.append("settings")
             # Set up parent flow run context
             client = client or get_client(sync_client=True)
             if flow_run_context := serialized_context.get("flow_run_context"):
@@ -125,6 +132,7 @@ def hydrated_context(
                     detached=True,
                 )
                 stack.enter_context(flow_run_context)
+                found_components.append("flow_run")
             # Set up parent task run context
             if parent_task_run_context := serialized_context.get("task_run_context"):
                 task_run_context = TaskRunContext(
@@ -132,12 +140,22 @@ def hydrated_context(
                     client=client,
                 )
                 stack.enter_context(task_run_context)
+                found_components.append("task_run")
             # Set up tags context
             if tags_context := serialized_context.get("tags_context"):
                 stack.enter_context(tags(*tags_context["current_tags"]))
+                found_components.append("tags")
             # Set up asset context
             if asset_context := serialized_context.get("asset_context"):
                 stack.enter_context(AssetContext(**asset_context))
+                found_components.append("assets")
+
+            logger.debug(
+                "Hydrated context components: %s",
+                ", ".join(found_components) if found_components else "none",
+            )
+        else:
+            logger.debug("No serialized context provided for hydration")
         yield
 
 
@@ -409,6 +427,25 @@ class EngineContext(RunContext):
 
     __var__: ClassVar[ContextVar[Self]] = ContextVar("flow_run")
 
+    def __enter__(self) -> Self:
+        result = super().__enter__()
+        flow_name = self.flow.name if self.flow else "unknown"
+        flow_run_id = self.flow_run.id if self.flow_run else "unknown"
+        task_runner_type = type(self.task_runner).__name__
+        param_keys = list(self.parameters.keys()) if self.parameters else []
+        logger.info(
+            "FlowRunContext entered for flow %r (flow_run_id=%s, "
+            "task_runner=%s, persist_result=%s, detached=%s, "
+            "parameter_keys=%s)",
+            flow_name,
+            flow_run_id,
+            task_runner_type,
+            self.persist_result,
+            self.detached,
+            param_keys,
+        )
+        return result
+
     def serialize(self: Self, include_secrets: bool = True) -> dict[str, Any]:
         serialized = self.model_dump(
             include={
@@ -455,6 +492,23 @@ class TaskRunContext(RunContext):
     persist_result: bool = Field(default_factory=get_default_persist_setting_for_tasks)
 
     __var__: ClassVar[ContextVar[Self]] = ContextVar("task_run")
+
+    def __enter__(self) -> Self:
+        result = super().__enter__()
+        task_name = self.task.name if self.task else "unknown"
+        task_run_id = self.task_run.id if self.task_run else "unknown"
+        flow_run_id = self.task_run.flow_run_id if self.task_run else "unknown"
+        param_keys = list(self.parameters.keys()) if self.parameters else []
+        logger.info(
+            "TaskRunContext entered for task %r (task_run_id=%s, "
+            "flow_run_id=%s, persist_result=%s, parameter_keys=%s)",
+            task_name,
+            task_run_id,
+            flow_run_id,
+            self.persist_result,
+            param_keys,
+        )
+        return result
 
     def serialize(self: Self, include_secrets: bool = True) -> dict[str, Any]:
         serialized = self.model_dump(
@@ -755,12 +809,33 @@ def get_run_context() -> Union[FlowRunContext, TaskRunContext]:
     """
     task_run_ctx = TaskRunContext.get()
     if task_run_ctx:
+        logger.debug(
+            "Retrieved TaskRunContext: task_run_name=%r, task_run_id=%s, "
+            "flow_run_id=%s, task_name=%r",
+            task_run_ctx.task_run.name,
+            task_run_ctx.task_run.id,
+            task_run_ctx.task_run.flow_run_id,
+            task_run_ctx.task.name if task_run_ctx.task else None,
+        )
         return task_run_ctx
 
     flow_run_ctx = FlowRunContext.get()
     if flow_run_ctx:
+        logger.debug(
+            "Retrieved FlowRunContext: flow_run_name=%r, flow_run_id=%s, "
+            "flow_name=%r, detached=%s",
+            flow_run_ctx.flow_run.name if flow_run_ctx.flow_run else None,
+            flow_run_ctx.flow_run.id if flow_run_ctx.flow_run else None,
+            flow_run_ctx.flow.name if flow_run_ctx.flow else None,
+            flow_run_ctx.detached,
+        )
         return flow_run_ctx
 
+    logger.warning(
+        "No run context available. get_run_context() was called outside of a "
+        "flow or task run. Ensure this is called within a @flow or @task "
+        "decorated function."
+    )
     raise MissingContextError(
         "No run context available. You are not in a flow or task run context."
     )

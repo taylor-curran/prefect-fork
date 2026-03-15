@@ -21,7 +21,10 @@ import os
 from typing import Any, Callable
 
 from prefect.context import TaskRunContext
+from prefect.logging.loggers import get_logger
 from prefect.settings import get_current_settings
+
+logger = get_logger(__name__)
 
 __all__ = [
     "id",
@@ -62,7 +65,15 @@ def __getattr__(name: str) -> Any:
 
     if func is None:
         if env_key in os.environ:
-            return os.environ[env_key]
+            value = os.environ[env_key]
+            logger.debug(
+                "Runtime task_run attribute %r resolved from environment "
+                "variable %s: %r",
+                name,
+                env_key,
+                value,
+            )
+            return value
         else:
             raise AttributeError(f"{__name__} has no attribute {name!r}")
 
@@ -72,13 +83,35 @@ def __getattr__(name: str) -> Any:
         # cast `mocked_value` to the same type as `real_value`
         try:
             cast_func = type_cast[type(real_value)]
-            return cast_func(mocked_value)
+            cast_value = cast_func(mocked_value)
+            logger.debug(
+                "Runtime task_run attribute %r resolved from environment "
+                "variable %s (overriding real value): %r",
+                name,
+                env_key,
+                cast_value,
+            )
+            return cast_value
         except KeyError:
             raise ValueError(
                 "This runtime context attribute cannot be mocked using an"
                 " environment variable. Please use monkeypatch instead."
             )
     else:
+        if real_value is None:
+            logger.warning(
+                "Runtime task_run attribute %r resolved to None; "
+                "the task run context may be unavailable",
+                name,
+            )
+        else:
+            source = "run context" if TaskRunContext.get() is not None else "default"
+            logger.debug(
+                "Runtime task_run attribute %r resolved from %s: %r",
+                name,
+                source,
+                real_value,
+            )
         return real_value
 
 

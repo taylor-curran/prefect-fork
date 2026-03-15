@@ -30,8 +30,11 @@ from zoneinfo import ZoneInfo
 from prefect._internal.concurrency.api import create_call, from_sync
 from prefect.client.orchestration import get_client
 from prefect.context import FlowRunContext, TaskRunContext
+from prefect.logging.loggers import get_logger
 from prefect.settings import PREFECT_API_URL, PREFECT_UI_URL
 from prefect.types._datetime import DateTime, now, parse_datetime
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from prefect.client.schemas.objects import Flow, FlowRun, TaskRun
@@ -93,7 +96,15 @@ def __getattr__(name: str) -> Any:
 
     if func is None:
         if env_key in os.environ:
-            return os.environ[env_key]
+            value = os.environ[env_key]
+            logger.debug(
+                "Runtime flow_run attribute %r resolved from environment "
+                "variable %s: %r",
+                name,
+                env_key,
+                value,
+            )
+            return value
         else:
             raise AttributeError(f"{__name__} has no attribute {name!r}")
 
@@ -103,14 +114,46 @@ def __getattr__(name: str) -> Any:
         # cast `mocked_value` to the same type as `real_value`
         try:
             cast_func = type_cast[type(real_value)]
-            return cast_func(mocked_value)
+            cast_value = cast_func(mocked_value)
+            logger.debug(
+                "Runtime flow_run attribute %r resolved from environment "
+                "variable %s (overriding real value): %r",
+                name,
+                env_key,
+                cast_value,
+            )
+            return cast_value
         except KeyError:
             raise ValueError(
                 "This runtime context attribute cannot be mocked using an"
                 " environment variable. Please use monkeypatch instead."
             )
     else:
+        if real_value is None:
+            logger.warning(
+                "Runtime flow_run attribute %r resolved to None; "
+                "the flow run context or API data may be unavailable",
+                name,
+            )
+        else:
+            source = _infer_flow_run_attr_source(name)
+            logger.debug(
+                "Runtime flow_run attribute %r resolved from %s: %r",
+                name,
+                source,
+                real_value,
+            )
         return real_value
+
+
+def _infer_flow_run_attr_source(name: str) -> str:
+    """Infer the source used to resolve a flow run runtime attribute."""
+    flow_run_ctx = FlowRunContext.get()
+    if flow_run_ctx is not None:
+        return "run context"
+    if os.getenv("PREFECT__FLOW_RUN_ID"):
+        return "API lookup (via PREFECT__FLOW_RUN_ID)"
+    return "environment variable"
 
 
 def __dir__() -> List[str]:
